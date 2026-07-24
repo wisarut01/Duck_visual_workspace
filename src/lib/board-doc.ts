@@ -52,6 +52,7 @@ export interface ArrowData {
   x2: number;
   y2: number;
   curve?: number;
+  strokeWidth?: number;
 }
 
 export interface BoardDoc {

@@ -72,6 +72,20 @@ a.avatar {
   color: #fff;
 }
 
+.shareBtn {
+  pointer-events: auto;
+  font: 600 13px/1 var(--font-ui);
+  color: #fff;
+  background: var(--accent);
+  border: 0;
+  border-radius: var(--r-panel);
+  padding: 0 16px;
+  height: 34px;
+  cursor: pointer;
+  box-shadow: var(--panel-shadow);
+  white-space: nowrap;
+}
+
 .presence {
   margin-left: auto;
   padding: 6px 12px 6px 10px;

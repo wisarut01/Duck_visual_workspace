@@ -121,6 +121,13 @@ const FONT_STACK: Record<import("@/lib/board-doc").FontFamily, string> = {
   mono: "var(--font-mono)",
 };
 
+const FONT_SIZE_MIN = 10;
+const FONT_SIZE_MAX = 96;
+const FONT_SIZE_STEP = 2;
+const ARROW_SNAP_PAD_PX = 28;
+const ARROW_STROKE_PRESETS = [1.5, 2.5, 4, 6.5];
+const ARROW_STROKE_DEFAULT = 2.5;
+
 // Shared floating control shown above a selected note/shape/text: font size
 // +/- and a sans/mono family toggle (the only two families DESIGN.md defines
 // — no serif, to keep the "engineering instrument" look, not "generic AI tool").
@@ -139,9 +146,9 @@ function FontToolbar({
 }) {
   return (
     <div className={styles.fontToolbar} style={{ left: x, top: y - 32 }} onPointerDown={(e) => e.stopPropagation()}>
-      <button onClick={() => onChange({ fontSize: Math.max(10, fontSize - 2) })}>A−</button>
+      <button onClick={() => onChange({ fontSize: Math.max(FONT_SIZE_MIN, fontSize - FONT_SIZE_STEP) })}>A−</button>
       <span>{fontSize}</span>
-      <button onClick={() => onChange({ fontSize: Math.min(40, fontSize + 2) })}>A+</button>
+      <button onClick={() => onChange({ fontSize: Math.min(FONT_SIZE_MAX, fontSize + FONT_SIZE_STEP) })}>A+</button>
       <div className={styles.ftSep} />
       <button className={fontFamily === "ui" ? styles.ftActive : ""} onClick={() => onChange({ fontFamily: "ui" })}>
         Sans
@@ -330,6 +337,14 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
     setBoardName(board, next);
   }
 
+  const [linkCopied, setLinkCopied] = useState(false);
+  function shareBoard() {
+    navigator.clipboard.writeText(window.location.href).then(() => {
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 1500);
+    });
+  }
+
   // Broadcast local cursor in world coords, throttled to one update per
   // animation frame so rapid mousemove doesn't flood awareness broadcasts.
   const cursorRaf = useRef(0);
@@ -504,8 +519,13 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
       const w = screenToWorld(e.clientX, e.clientY);
       anchorDragRef.current = null;
       setArrowPreview(null);
+      // Padded past the shape's exact bounds so a drop that's a few screen
+      // pixels off the edge still snaps — a strict point-in-rect test made
+      // this need pixel-perfect precision to trigger at all.
+      const pad = ARROW_SNAP_PAD_PX / view.s;
       const target = shapes.find(
-        ({ data: sd }) => w.x >= sd.x && w.x <= sd.x + sd.w && w.y >= sd.y && w.y <= sd.y + sd.h,
+        ({ data: sd }) =>
+          w.x >= sd.x - pad && w.x <= sd.x + sd.w + pad && w.y >= sd.y - pad && w.y <= sd.y + sd.h + pad,
       );
       let ex = w.x, ey = w.y;
       if (target) {
@@ -772,6 +792,15 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
           <small>{roomId.toUpperCase()}</small>
         </div>
 
+        <button
+          className={topbarStyles.shareBtn}
+          onClick={shareBoard}
+          onPointerDown={(e) => e.stopPropagation()}
+          title="Copy this board's link"
+        >
+          {linkCopied ? "Copied!" : "Share"}
+        </button>
+
         <div className={`${topbarStyles.tbGroup} ${topbarStyles.presence}`}>
           <span
             className={topbarStyles.live}
@@ -924,6 +953,7 @@ function ArrowItem({
   const curve = data.curve ?? 0;
   const cx = (data.x1 + data.x2) / 2 + nx * curve;
   const cy = (data.y1 + data.y2) / 2 + ny * curve;
+  const strokeWidth = data.strokeWidth ?? ARROW_STROKE_DEFAULT;
 
   function beginDrag(mode: DragMode) {
     return (e: React.PointerEvent) => {
@@ -981,7 +1011,7 @@ function ArrowItem({
         d={`M ${data.x1} ${data.y1} Q ${cx} ${cy} ${data.x2} ${data.y2}`}
         fill="none"
         stroke="var(--stroke-ink)"
-        strokeWidth={2.5}
+        strokeWidth={strokeWidth}
         strokeLinecap="round"
         className={`${styles.arrow} ${selected ? styles.selected : ""}`}
         onPointerDown={onPathDown}
@@ -993,6 +1023,38 @@ function ArrowItem({
           <circle cx={cx} cy={cy} r={6} className={styles.curveHandle} onPointerDown={beginDrag("curve")} onPointerMove={onDragMove} onPointerUp={onDragUp} />
           <circle cx={data.x1} cy={data.y1} r={6} className={styles.endHandle} onPointerDown={beginDrag("p1")} onPointerMove={onDragMove} onPointerUp={onDragUp} />
           <circle cx={data.x2} cy={data.y2} r={6} className={styles.endHandle} onPointerDown={beginDrag("p2")} onPointerMove={onDragMove} onPointerUp={onDragUp} />
+          <g transform={`translate(${cx - (ARROW_STROKE_PRESETS.length * 22) / 2}, ${cy - 40})`}>
+            <rect
+              x={-6}
+              y={-13}
+              width={ARROW_STROKE_PRESETS.length * 22 + 12}
+              height={26}
+              rx={7}
+              className={styles.arrowThicknessBar}
+            />
+            {ARROW_STROKE_PRESETS.map((w, i) => (
+              <g
+                key={w}
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  updateFields(board.doc, board.arrows, id, { strokeWidth: w });
+                }}
+                style={{ cursor: "pointer" }}
+              >
+                <rect x={i * 22} y={-10} width={20} height={20} fill="transparent" />
+                <line
+                  x1={i * 22 + 3}
+                  y1={0}
+                  x2={i * 22 + 17}
+                  y2={0}
+                  stroke="var(--ink)"
+                  strokeWidth={w}
+                  strokeLinecap="round"
+                  opacity={strokeWidth === w ? 1 : 0.35}
+                />
+              </g>
+            ))}
+          </g>
         </>
       )}
     </>

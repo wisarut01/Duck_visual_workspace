@@ -97,7 +97,7 @@
 .shape.ellipse { border-radius: 50%; }
 .shape.rect { border-radius: 8px; }
 .shape.diamond { border-radius: 6px; transform: rotate(45deg); }
-.shape.diamond .body { transform: rotate(-45deg); }
+.shape.diamond .shapeBody { transform: rotate(-45deg); }
 .shape.selected { outline: 2px solid var(--accent); outline-offset: 2px; }
 .shapeBody {
   outline: none;
@@ -189,6 +189,12 @@
   stroke-width: 2;
   pointer-events: auto;
   cursor: move;
+}
+.arrowThicknessBar {
+  fill: var(--panel);
+  stroke: var(--panel-border);
+  stroke-width: 1;
+  pointer-events: none;
 }
 
 /* ---- text ---- */
