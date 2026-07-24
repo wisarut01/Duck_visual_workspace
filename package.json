@@ -6,12 +6,19 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "ws-server": "node server/y-server.mjs"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.110.8",
+    "lib0": "^0.2.117",
     "next": "16.2.10",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "ws": "^8.21.0",
+    "y-protocols": "^1.0.7",
+    "y-websocket": "^3.0.0",
+    "yjs": "^13.6.31"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

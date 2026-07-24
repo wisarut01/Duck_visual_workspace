@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# realtime relay persisted room snapshots (epic 6)
+/server/data/*.ybin
+
+# app database — accounts, sessions, board registry (epic 7)
+/data/
