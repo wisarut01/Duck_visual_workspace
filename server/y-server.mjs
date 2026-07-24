@@ -40,16 +40,23 @@ async function loadDoc(roomId, doc) {
     return;
   }
   if (data?.data) {
-    // bytea comes back as a "\x"-prefixed hex string over the JS client.
-    Y.applyUpdate(doc, Buffer.from(data.data.slice(2), "hex"), "remote-load");
+    try {
+      // bytea comes back as a "\x"-prefixed hex string over the JS client.
+      Y.applyUpdate(doc, Buffer.from(data.data.slice(2), "hex"), "remote-load");
+    } catch (err) {
+      console.error(`corrupt snapshot for ${roomId}, starting fresh:`, err.message);
+    }
   }
 }
 
 async function saveDoc(roomId, doc) {
-  const update = Buffer.from(Y.encodeStateAsUpdate(doc));
+  // PostgREST needs bytea as a "\x"-prefixed hex string in the JSON body —
+  // a raw Buffer/Uint8Array serializes as {"type":"Buffer","data":[...]}
+  // instead, which silently corrupts the stored column.
+  const hex = "\\x" + Buffer.from(Y.encodeStateAsUpdate(doc)).toString("hex");
   const { error } = await supabase
     .from("board_snapshots")
-    .upsert({ room_id: roomKey(roomId), data: update, updated_at: new Date().toISOString() });
+    .upsert({ room_id: roomKey(roomId), data: hex, updated_at: new Date().toISOString() });
   if (error) console.error(`save failed for ${roomId}:`, error.message);
 }
 
@@ -59,7 +66,7 @@ function getRoom(roomId) {
   let room = rooms.get(roomId);
   if (!room) {
     const doc = new Y.Doc();
-    loadDoc(roomId, doc);
+    loadDoc(roomId, doc).catch((err) => console.error(`load failed for ${roomId}:`, err.message));
     const awareness = new awarenessProtocol.Awareness(doc);
     room = { doc, awareness, conns: new Set(), saveTimer: null };
     doc.on("update", (_update, origin) => {
