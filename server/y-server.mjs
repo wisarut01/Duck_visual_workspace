@@ -16,7 +16,9 @@ import { createClient } from "@supabase/supabase-js";
 
 const MESSAGE_SYNC = 0;
 const MESSAGE_AWARENESS = 1;
-const PORT = process.env.Y_WS_PORT ? Number(process.env.Y_WS_PORT) : 1234;
+// Render (and most PaaS hosts) assign the listen port via $PORT at runtime;
+// Y_WS_PORT stays for local dev where that's not set.
+const PORT = Number(process.env.PORT ?? process.env.Y_WS_PORT ?? 1234);
 const SAVE_DEBOUNCE_MS = 1000;
 
 if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {

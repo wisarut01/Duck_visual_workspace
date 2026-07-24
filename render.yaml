@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: coboard-relay
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server/y-server.mjs
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
