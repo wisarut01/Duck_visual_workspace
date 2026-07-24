@@ -19,7 +19,7 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "Name and color are required." }, { status: 400 });
   }
 
-  updateUserProfile(user.id, name, color);
-  const updated = getUserById(user.id)!;
+  await updateUserProfile(user.id, name, color);
+  const updated = (await getUserById(user.id))!;
   return NextResponse.json({ user: publicUser(updated) });
 }

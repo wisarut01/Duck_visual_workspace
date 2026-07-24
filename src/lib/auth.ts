@@ -30,7 +30,7 @@ export function verifyPassword(password: string, hash: string, salt: string): bo
 export async function startSession(userId: string) {
   const id = crypto.randomBytes(32).toString("hex");
   const expiresAt = Date.now() + SESSION_TTL_MS;
-  createSession(id, userId, expiresAt);
+  await createSession(id, userId, expiresAt);
   const jar = await cookies();
   jar.set(SESSION_COOKIE, id, {
     httpOnly: true,
@@ -43,7 +43,7 @@ export async function startSession(userId: string) {
 export async function endSession() {
   const jar = await cookies();
   const id = jar.get(SESSION_COOKIE)?.value;
-  if (id) deleteSession(id);
+  if (id) await deleteSession(id);
   jar.delete(SESSION_COOKIE);
 }
 
@@ -51,9 +51,9 @@ export async function currentUser(): Promise<UserRow | null> {
   const jar = await cookies();
   const id = jar.get(SESSION_COOKIE)?.value;
   if (!id) return null;
-  const session = getSession(id);
+  const session = await getSession(id);
   if (!session || session.expires_at < Date.now()) return null;
-  return getUserById(session.user_id) ?? null;
+  return (await getUserById(session.user_id)) ?? null;
 }
 
 export function publicUser(u: UserRow) {

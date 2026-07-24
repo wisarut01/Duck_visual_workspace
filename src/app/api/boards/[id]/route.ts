@@ -7,6 +7,6 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
   if (!user) return NextResponse.json({ error: "Not signed in." }, { status: 401 });
 
   const { id } = await params;
-  deleteBoard(id, user.id);
-  return NextResponse.json({ boards: listBoardsForOwner(user.id) });
+  await deleteBoard(id, user.id);
+  return NextResponse.json({ boards: await listBoardsForOwner(user.id) });
 }

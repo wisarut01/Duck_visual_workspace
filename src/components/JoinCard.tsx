@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { USER_COLORS } from "@/lib/room";
 import { loadProfile, saveProfile, defaultProfile } from "@/lib/profile";
 
@@ -18,8 +18,11 @@ export default function JoinCard({ roomId, onJoin }: JoinCardProps) {
   // connection: the submit button is disabled until hydration has actually
   // attached the onSubmit handler, so an early tap can't fall through to a
   // real page navigation before React is ready to intercept it.
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  const mounted = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false,
+  );
 
   function submit(e: React.FormEvent) {
     e.preventDefault();

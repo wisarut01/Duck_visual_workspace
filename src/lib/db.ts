@@ -1,47 +1,17 @@
-// Real backend store (epic 7) — SQLite via Node's built-in `node:sqlite`
-// (no native dependency to install, in keeping with this project's
-// self-hosted-over-managed-service approach; see server/y-server.mjs).
-// Server-only: never import this from a client component.
-import { DatabaseSync } from "node:sqlite";
-import path from "path";
-import fs from "fs";
+// Real backend store (epic 7). Originally SQLite via `node:sqlite`, moved
+// to Supabase Postgres because Vercel's serverless functions have a
+// read-only/ephemeral filesystem — a local .db file either fails to write
+// or silently loses data across cold starts and instances (same class of
+// bug as the relay's on-disk .ybin snapshots before that moved to Supabase
+// too; see server/y-server.mjs). Server-only: never import from a client
+// component.
+import { createClient } from "@supabase/supabase-js";
 import crypto from "crypto";
 
-const DATA_DIR = path.join(process.cwd(), "data");
-fs.mkdirSync(DATA_DIR, { recursive: true });
-
-// A fresh DatabaseSync per module load is fine here: Next.js dev server
-// keeps this module cached across requests (only re-evaluated on file
-// change), and route handlers run in the same Node process, not per-request
-// isolates.
-const db = new DatabaseSync(path.join(DATA_DIR, "app.db"));
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    email TEXT UNIQUE NOT NULL,
-    name TEXT NOT NULL,
-    color TEXT NOT NULL,
-    password_hash TEXT NOT NULL,
-    password_salt TEXT NOT NULL,
-    created_at INTEGER NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS sessions (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    expires_at INTEGER NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS boards (
-    id TEXT PRIMARY KEY,
-    owner_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    updated_at INTEGER NOT NULL,
-    FOREIGN KEY (owner_id) REFERENCES users(id)
-  );
-`);
+if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set");
+}
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
 export interface UserRow {
   id: string;
@@ -64,67 +34,78 @@ export function newId(): string {
   return crypto.randomUUID();
 }
 
-export function getUserByEmail(email: string): UserRow | undefined {
-  const row = db.prepare("SELECT * FROM users WHERE email = ?").get(email) as UserRow | undefined;
-  return row;
+export async function getUserByEmail(email: string): Promise<UserRow | undefined> {
+  const { data, error } = await supabase.from("users").select("*").eq("email", email).maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ?? undefined;
 }
 
-export function getUserById(id: string): UserRow | undefined {
-  return db.prepare("SELECT * FROM users WHERE id = ?").get(id) as UserRow | undefined;
+export async function getUserById(id: string): Promise<UserRow | undefined> {
+  const { data, error } = await supabase.from("users").select("*").eq("id", id).maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ?? undefined;
 }
 
-export function createUser(u: Omit<UserRow, "created_at">): UserRow {
+export async function createUser(u: Omit<UserRow, "created_at">): Promise<UserRow> {
   const created_at = Date.now();
-  db.prepare(
-    "INSERT INTO users (id, email, name, color, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-  ).run(u.id, u.email, u.name, u.color, u.password_hash, u.password_salt, created_at);
+  const { error } = await supabase.from("users").insert({ ...u, created_at });
+  if (error) throw new Error(error.message);
   return { ...u, created_at };
 }
 
-export function updateUserProfile(id: string, name: string, color: string) {
-  db.prepare("UPDATE users SET name = ?, color = ? WHERE id = ?").run(name, color, id);
+export async function updateUserProfile(id: string, name: string, color: string) {
+  const { error } = await supabase.from("users").update({ name, color }).eq("id", id);
+  if (error) throw new Error(error.message);
 }
 
-export function createSession(id: string, userId: string, expiresAt: number) {
-  db.prepare("INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)").run(id, userId, expiresAt);
+export async function createSession(id: string, userId: string, expiresAt: number) {
+  const { error } = await supabase.from("sessions").insert({ id, user_id: userId, expires_at: expiresAt });
+  if (error) throw new Error(error.message);
 }
 
-export function getSession(id: string): { id: string; user_id: string; expires_at: number } | undefined {
-  return db.prepare("SELECT * FROM sessions WHERE id = ?").get(id) as
-    | { id: string; user_id: string; expires_at: number }
-    | undefined;
+export async function getSession(id: string): Promise<{ id: string; user_id: string; expires_at: number } | undefined> {
+  const { data, error } = await supabase.from("sessions").select("*").eq("id", id).maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ?? undefined;
 }
 
-export function deleteSession(id: string) {
-  db.prepare("DELETE FROM sessions WHERE id = ?").run(id);
+export async function deleteSession(id: string) {
+  const { error } = await supabase.from("sessions").delete().eq("id", id);
+  if (error) throw new Error(error.message);
 }
 
-export function listBoardsForOwner(ownerId: string): BoardRow[] {
-  return db
-    .prepare("SELECT * FROM boards WHERE owner_id = ? ORDER BY updated_at DESC")
-    .all(ownerId) as BoardRow[];
+export async function listBoardsForOwner(ownerId: string): Promise<BoardRow[]> {
+  const { data, error } = await supabase
+    .from("boards")
+    .select("*")
+    .eq("owner_id", ownerId)
+    .order("updated_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return data ?? [];
 }
 
-export function upsertBoard(id: string, ownerId: string, name: string) {
-  const existing = db.prepare("SELECT id FROM boards WHERE id = ?").get(id) as { id: string } | undefined;
+export async function upsertBoard(id: string, ownerId: string, name: string) {
+  // `id` is client-supplied (a shared room id), so this must never let a
+  // plain upsert-by-primary-key reassign an existing row's owner_id to
+  // whoever happens to visit that link next.
+  const { data: existing, error: selectError } = await supabase
+    .from("boards")
+    .select("owner_id")
+    .eq("id", id)
+    .maybeSingle();
+  if (selectError) throw new Error(selectError.message);
+
   const updated_at = Date.now();
-  if (existing) {
-    db.prepare("UPDATE boards SET name = ?, updated_at = ? WHERE id = ? AND owner_id = ?").run(
-      name,
-      updated_at,
-      id,
-      ownerId,
-    );
-  } else {
-    db.prepare("INSERT INTO boards (id, owner_id, name, updated_at) VALUES (?, ?, ?, ?)").run(
-      id,
-      ownerId,
-      name,
-      updated_at,
-    );
+  if (!existing) {
+    const { error } = await supabase.from("boards").insert({ id, owner_id: ownerId, name, updated_at });
+    if (error) throw new Error(error.message);
+  } else if (existing.owner_id === ownerId) {
+    const { error } = await supabase.from("boards").update({ name, updated_at }).eq("id", id).eq("owner_id", ownerId);
+    if (error) throw new Error(error.message);
   }
 }
 
-export function deleteBoard(id: string, ownerId: string) {
-  db.prepare("DELETE FROM boards WHERE id = ? AND owner_id = ?").run(id, ownerId);
+export async function deleteBoard(id: string, ownerId: string) {
+  const { error } = await supabase.from("boards").delete().eq("id", id).eq("owner_id", ownerId);
+  if (error) throw new Error(error.message);
 }

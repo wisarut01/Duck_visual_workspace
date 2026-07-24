@@ -7,7 +7,7 @@ export async function POST(req: NextRequest) {
   const email = typeof body?.email === "string" ? body.email.trim().toLowerCase() : "";
   const password = typeof body?.password === "string" ? body.password : "";
 
-  const user = email ? getUserByEmail(email) : undefined;
+  const user = email ? await getUserByEmail(email) : undefined;
   if (!user || !verifyPassword(password, user.password_hash, user.password_salt)) {
     return NextResponse.json({ error: "Invalid email or password." }, { status: 401 });
   }
