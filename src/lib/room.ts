@@ -8,5 +8,13 @@ export function randomRoomId(): string {
   return `${a}-${n}-${suffix}`;
 }
 
+// Accepts either a bare room id or a full board link someone shared
+// (e.g. "https://host/board/eager-field-355") and returns just the id.
+export function parseRoomId(input: string): string {
+  const trimmed = input.trim();
+  const match = trimmed.match(/\/board\/([^/?#]+)/);
+  return decodeURIComponent(match ? match[1] : trimmed);
+}
+
 // Presence / cursor colors — DESIGN.md 1.4, distinct from the sticky palette and accent.
 export const USER_COLORS = ["#e8543f", "#7c3aed", "#0ea5a3", "#d9328a"] as const;

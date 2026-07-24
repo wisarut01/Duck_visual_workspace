@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { fetchMe, listBoards, removeBoard, touchBoard, type ApiBoard, type ApiUser } from "@/lib/api";
-import { randomRoomId } from "@/lib/room";
+import { parseRoomId, randomRoomId } from "@/lib/room";
 
 function timeAgo(ts: number): string {
   const s = Math.max(1, Math.round((Date.now() - ts) / 1000));
@@ -22,6 +22,8 @@ export default function DashboardPage() {
   const [boards, setBoards] = useState<ApiBoard[]>([]);
   const [user, setUser] = useState<ApiUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [joinValue, setJoinValue] = useState("");
+  const [joining, setJoining] = useState(false);
 
   useEffect(() => {
     fetchMe().then(({ ok, data }) => {
@@ -43,6 +45,14 @@ export default function DashboardPage() {
 
   function onRemove(id: string) {
     removeBoard(id).then(({ data }) => setBoards(data.boards ?? []));
+  }
+
+  function joinBoard(e: React.FormEvent) {
+    e.preventDefault();
+    const id = parseRoomId(joinValue);
+    if (!id) return;
+    setJoining(true);
+    touchBoard(id).then(() => router.push(`/board/${id}`));
   }
 
   if (loading || !user) return null;
@@ -122,6 +132,48 @@ export default function DashboardPage() {
             {boards.length} board{boards.length === 1 ? "" : "s"}
           </span>
         </div>
+
+        <form
+          onSubmit={joinBoard}
+          style={{
+            display: "flex",
+            gap: 8,
+            marginBottom: 24,
+          }}
+        >
+          <input
+            value={joinValue}
+            onChange={(e) => setJoinValue(e.target.value)}
+            placeholder="Paste a board link or id to join…"
+            spellCheck={false}
+            style={{
+              flex: 1,
+              font: "500 13px/1.3 var(--font-ui)",
+              color: "var(--ink)",
+              background: "var(--panel)",
+              border: "1px solid var(--panel-border)",
+              borderRadius: "var(--r-control)",
+              padding: "9px 12px",
+              outline: "none",
+            }}
+          />
+          <button
+            type="submit"
+            disabled={!joinValue.trim() || joining}
+            style={{
+              font: "600 13px/1 var(--font-ui)",
+              color: "var(--accent)",
+              background: "var(--panel)",
+              border: "1px solid var(--panel-border)",
+              borderRadius: "var(--r-control)",
+              padding: "0 16px",
+              cursor: joinValue.trim() && !joining ? "pointer" : "default",
+              opacity: joinValue.trim() && !joining ? 1 : 0.6,
+            }}
+          >
+            Join
+          </button>
+        </form>
 
         <div
           style={{
