@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styles from "./Canvas.module.css";
 import topbarStyles from "./BoardShell.module.css";
 import { NOTE_COLORS } from "@/lib/palette";
@@ -15,6 +15,11 @@ import {
   type ArrowData,
   type ShapeKind,
   type Presence,
+  type TextAlign,
+  type ArrowHead,
+  type Routing,
+  type Side,
+  type Binding,
   createBoardDoc,
   connectRealtime,
   addNote,
@@ -29,6 +34,7 @@ import {
   onBoardNameChange,
 } from "@/lib/board-doc";
 import { useYCollection } from "@/hooks/useYCollection";
+import { elbowPoints, roundedPath, elbowMidpoint } from "@/lib/connector-path";
 import type { WebsocketProvider } from "y-websocket";
 
 type ConnState = "connecting" | "connected" | "disconnected";
@@ -127,22 +133,39 @@ const FONT_SIZE_STEP = 2;
 const ARROW_SNAP_PAD_PX = 28;
 const ARROW_STROKE_PRESETS = [1.5, 2.5, 4, 6.5];
 const ARROW_STROKE_DEFAULT = 2.5;
+const ARROW_HEAD_STYLES: ArrowHead[] = ["none", "arrow", "triangle", "circle", "diamond"];
+const ROUTING_MODES: Routing[] = ["straight", "curved", "elbow"];
+// Epic C quick-create: gap (world units) between a shape and the sibling
+// created off one of its hover anchors, and how many times to step further
+// out along the same axis if the spot is already occupied.
+const QUICK_CREATE_GAP = 60;
+const QUICK_CREATE_MAX_STEPS = 20;
+// Click-vs-drag threshold (screen px) for a shape's hover anchor: under this,
+// pointerdown+up is a quick-create click; over it, it's a connector drag.
+const ANCHOR_CLICK_PX = 4;
 
 // Shared floating control shown above a selected note/shape/text: font size
 // +/- and a sans/mono family toggle (the only two families DESIGN.md defines
-// — no serif, to keep the "engineering instrument" look, not "generic AI tool").
+// — no serif, to keep the "engineering instrument" look, not "generic AI tool"),
+// plus a left/center/right text-align group (Epic D).
 function FontToolbar({
   x,
   y,
   fontSize,
   fontFamily,
+  textAlign,
   onChange,
 }: {
   x: number;
   y: number;
   fontSize: number;
   fontFamily: import("@/lib/board-doc").FontFamily;
-  onChange: (patch: { fontSize?: number; fontFamily?: import("@/lib/board-doc").FontFamily }) => void;
+  textAlign: TextAlign;
+  onChange: (patch: {
+    fontSize?: number;
+    fontFamily?: import("@/lib/board-doc").FontFamily;
+    textAlign?: TextAlign;
+  }) => void;
 }) {
   return (
     <div className={styles.fontToolbar} style={{ left: x, top: y - 32 }} onPointerDown={(e) => e.stopPropagation()}>
@@ -156,24 +179,170 @@ function FontToolbar({
       <button className={fontFamily === "mono" ? styles.ftActive : ""} onClick={() => onChange({ fontFamily: "mono" })}>
         Mono
       </button>
+      <div className={styles.ftSep} />
+      {(["left", "center", "right"] as TextAlign[]).map((a) => (
+        <button
+          key={a}
+          className={textAlign === a ? styles.ftActive : ""}
+          title={`Align ${a}`}
+          onClick={() => onChange({ textAlign: a })}
+        >
+          <svg width={13} height={13} viewBox="0 0 24 24">
+            {a === "left" && (
+              <path d="M4 6h16M4 12h10M4 18h14" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" />
+            )}
+            {a === "center" && (
+              <path d="M4 6h16M8 12h8M5 18h14" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" />
+            )}
+            {a === "right" && (
+              <path d="M4 6h16M10 12h10M6 18h14" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" />
+            )}
+          </svg>
+        </button>
+      ))}
     </div>
   );
 }
 
-// Closest point on an axis-aligned rect's boundary to (px,py) — used to snap
-// an auto-arrow's endpoint onto whichever shape it was dropped on, whether
-// the drop point is inside the shape (push out to the nearest edge) or
-// outside it (already on the boundary once clamped into the rect).
-function nearestBoundaryPoint(px: number, py: number, rx: number, ry: number, rw: number, rh: number) {
-  const cx = Math.min(rx + rw, Math.max(rx, px));
-  const cy = Math.min(ry + rh, Math.max(ry, py));
-  if (cx !== px || cy !== py) return { x: cx, y: cy };
-  const dl = px - rx, dr = rx + rw - px, dt = py - ry, db = ry + rh - py;
-  const m = Math.min(dl, dr, dt, db);
-  if (m === dl) return { x: rx, y: py };
-  if (m === dr) return { x: rx + rw, y: py };
-  if (m === dt) return { x: px, y: ry };
-  return { x: px, y: ry + rh };
+// Epic B: resolves a connector endpoint bound to a shape into a concrete
+// world point + concrete side. `side: "auto"` picks whichever of the
+// shape's four bbox-side midpoints faces `otherX/otherY` — ellipse/diamond
+// attach on the bbox too (acceptable per PLAN.md; their true outline attach
+// would need per-kind geometry this pass didn't invest in).
+function resolveBinding(
+  shape: ShapeData,
+  side: Side | "auto",
+  otherX: number,
+  otherY: number,
+): { point: { x: number; y: number }; side: Side } {
+  let s = side;
+  if (s === "auto") {
+    const cx = shape.x + shape.w / 2;
+    const cy = shape.y + shape.h / 2;
+    const dx = otherX - cx;
+    const dy = otherY - cy;
+    s = Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? "e" : "w") : dy >= 0 ? "s" : "n";
+  }
+  switch (s) {
+    case "n":
+      return { point: { x: shape.x + shape.w / 2, y: shape.y }, side: "n" };
+    case "s":
+      return { point: { x: shape.x + shape.w / 2, y: shape.y + shape.h }, side: "s" };
+    case "e":
+      return { point: { x: shape.x + shape.w, y: shape.y + shape.h / 2 }, side: "e" };
+    default:
+      return { point: { x: shape.x, y: shape.y + shape.h / 2 }, side: "w" };
+  }
+}
+
+// Marker <defs> ids are global to the document (SVG markers aren't scoped to
+// their own <svg>), so this prefix only needs to be unique within a page —
+// there's exactly one Canvas mounted at a time.
+const ARROWHEAD_ID_PREFIX = "cb-arrowhead";
+function arrowheadMarkerId(head: ArrowHead) {
+  return `${ARROWHEAD_ID_PREFIX}-${head}`;
+}
+
+// One <marker> per style (not per style×strokeWidth): markerUnits="strokeWidth"
+// scales it with the line automatically, and orient="auto-start-reverse"
+// flips it correctly when used as marker-start vs marker-end. fill:
+// context-stroke picks up the referencing path's actual stroke color
+// (including the `.selected` accent override) for free — supported in all
+// evergreen browsers this app already targets.
+function ArrowheadDefs() {
+  return (
+    <defs>
+      <marker
+        id={arrowheadMarkerId("arrow")}
+        viewBox="0 0 10 10"
+        refX="7.5"
+        refY="5"
+        markerWidth="4.5"
+        markerHeight="4.5"
+        markerUnits="strokeWidth"
+        orient="auto-start-reverse"
+      >
+        <path d="M0.5,0.5 L9,5 L0.5,9.5" fill="none" stroke="context-stroke" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" />
+      </marker>
+      <marker
+        id={arrowheadMarkerId("triangle")}
+        viewBox="0 0 10 10"
+        refX="8"
+        refY="5"
+        markerWidth="4.5"
+        markerHeight="4.5"
+        markerUnits="strokeWidth"
+        orient="auto-start-reverse"
+      >
+        <path d="M0,0 L10,5 L0,10 z" fill="context-stroke" />
+      </marker>
+      <marker
+        id={arrowheadMarkerId("circle")}
+        viewBox="0 0 10 10"
+        refX="5"
+        refY="5"
+        markerWidth="3.6"
+        markerHeight="3.6"
+        markerUnits="strokeWidth"
+        orient="auto-start-reverse"
+      >
+        <circle cx="5" cy="5" r="4" fill="context-stroke" />
+      </marker>
+      <marker
+        id={arrowheadMarkerId("diamond")}
+        viewBox="0 0 10 10"
+        refX="5"
+        refY="5"
+        markerWidth="4.2"
+        markerHeight="4.2"
+        markerUnits="strokeWidth"
+        orient="auto-start-reverse"
+      >
+        <path d="M5,0 L10,5 L5,10 L0,5 z" fill="context-stroke" />
+      </marker>
+    </defs>
+  );
+}
+
+// Epic B "attract while dragging": rendered in the SVG world layer (not
+// dependent on CSS :hover, since the pointer that's dragging a connector
+// endpoint is captured elsewhere, not necessarily over this shape's DOM
+// node) whenever a connector drag's endpoint is within snap range of a
+// shape. Shows all 4 candidate anchor points, with the one that will
+// actually be used picked out.
+function AttractAnchors({ data, activeSide }: { data: ShapeData; activeSide: Side }) {
+  const pts: { side: Side; x: number; y: number }[] = [
+    { side: "n", x: data.x + data.w / 2, y: data.y },
+    { side: "e", x: data.x + data.w, y: data.y + data.h / 2 },
+    { side: "s", x: data.x + data.w / 2, y: data.y + data.h },
+    { side: "w", x: data.x, y: data.y + data.h / 2 },
+  ];
+  return (
+    <g pointerEvents="none">
+      <rect
+        x={data.x - 4}
+        y={data.y - 4}
+        width={data.w + 8}
+        height={data.h + 8}
+        fill="none"
+        stroke="var(--accent)"
+        strokeWidth={1.5}
+        strokeDasharray="4 3"
+        rx={8}
+      />
+      {pts.map((p) => (
+        <circle
+          key={p.side}
+          cx={p.x}
+          cy={p.y}
+          r={p.side === activeSide ? 6 : 4}
+          fill={p.side === activeSide ? "var(--accent)" : "var(--panel)"}
+          stroke="var(--accent)"
+          strokeWidth={2}
+        />
+      ))}
+    </g>
+  );
 }
 
 // ---- corner resize handles, shared by shapes & frames ----
@@ -431,16 +600,78 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
   const [arrowPreview, setArrowPreview] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
 
   // ---- hover-anchor connector (Miro-style: drag from a shape's edge dot to
-  // auto-create an arrow, snapping onto whichever shape it's dropped on) ----
-  const anchorDragRef = useRef<{ x1: number; y1: number } | null>(null);
-  const beginAnchorDrag = useCallback(
-    (x: number, y: number) => {
-      stopFollow();
-      anchorDragRef.current = { x1: x, y1: y };
-      setArrowPreview({ x1: x, y1: y, x2: x, y2: y });
+  // auto-create an arrow, snapping onto whichever shape it's dropped on;
+  // click instead of drag quick-creates a connected sibling shape — Epic C) --
+  const shapesById = useMemo(() => new Map(shapes.map((s) => [s.id, s.data])), [shapes]);
+
+  // A pointerdown on an anchor doesn't commit to drag-a-connector until the
+  // pointer has moved past ANCHOR_CLICK_PX; under that, pointerup is a
+  // quick-create click instead (same click-vs-drag split as useSimpleDrag).
+  const anchorPendingRef = useRef<{
+    shapeId: string;
+    side: Side;
+    x: number;
+    y: number;
+    startClientX: number;
+    startClientY: number;
+  } | null>(null);
+  const anchorDragRef = useRef<{ x1: number; y1: number; fromId?: string; fromSide?: Side } | null>(null);
+  const [attractTarget, setAttractTarget] = useState<{ id: string; side: Side } | null>(null);
+
+  const onAnchorPointerDown = useCallback(
+    (shapeId: string, side: Side, x: number, y: number, clientX: number, clientY: number) => {
+      anchorPendingRef.current = { shapeId, side, x, y, startClientX: clientX, startClientY: clientY };
     },
-    [stopFollow],
+    [],
   );
+
+  function findAttractTarget(px: number, py: number, excludeId?: string) {
+    const pad = ARROW_SNAP_PAD_PX / view.s;
+    return shapes.find(
+      ({ id, data: sd }) =>
+        id !== excludeId && px >= sd.x - pad && px <= sd.x + sd.w + pad && py >= sd.y - pad && py <= sd.y + sd.h + pad,
+    );
+  }
+
+  // Same kind/size/color as `src`, offset one gap past its `side`, nudged
+  // further out along that axis if the spot overlaps an existing shape.
+  function quickCreateFromAnchor(shapeId: string, side: Side) {
+    const src = shapesById.get(shapeId);
+    if (!src) return;
+    const stepX = src.w + QUICK_CREATE_GAP;
+    const stepY = src.h + QUICK_CREATE_GAP;
+    let nx = src.x;
+    let ny = src.y;
+    if (side === "e") nx += stepX;
+    else if (side === "w") nx -= stepX;
+    else if (side === "s") ny += stepY;
+    else ny -= stepY;
+
+    const overlaps = (x: number, y: number) =>
+      shapes.some(({ data: o }) => x < o.x + o.w && x + src.w > o.x && y < o.y + o.h && y + src.h > o.y);
+    let steps = 0;
+    while (overlaps(nx, ny) && steps < QUICK_CREATE_MAX_STEPS) {
+      if (side === "e") nx += stepX;
+      else if (side === "w") nx -= stepX;
+      else if (side === "s") ny += stepY;
+      else ny -= stepY;
+      steps += 1;
+    }
+
+    const opposite: Record<Side, Side> = { n: "s", s: "n", e: "w", w: "e" };
+    const dstSide = opposite[side];
+    const dst: ShapeData = { kind: src.kind, x: nx, y: ny, w: src.w, h: src.h, color: src.color, body: "" };
+    const srcAnchor = resolveBinding(src, side, nx + dst.w / 2, ny + dst.h / 2).point;
+    const dstAnchor = resolveBinding(dst, dstSide, src.x + src.w / 2, src.y + src.h / 2).point;
+
+    const newId = addShape(board, src.kind, nx, ny, src.w, src.h, src.color);
+    addArrow(board, srcAnchor.x, srcAnchor.y, dstAnchor.x, dstAnchor.y, {
+      from: { id: shapeId, side },
+      to: { id: newId, side: dstSide },
+    });
+    setSelection({ kind: "shape", id: newId });
+    setJustCreated(newId);
+  }
 
   function onViewportPointerDown(e: React.PointerEvent) {
     const w = screenToWorld(e.clientX, e.clientY);
@@ -487,9 +718,21 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
     const wp = screenToWorld(e.clientX, e.clientY);
     broadcastCursor(wp.x, wp.y);
 
+    if (anchorPendingRef.current) {
+      const p = anchorPendingRef.current;
+      const dist = Math.hypot(e.clientX - p.startClientX, e.clientY - p.startClientY);
+      if (dist <= ANCHOR_CLICK_PX) return; // still just a pending click
+      // Promoted past the click threshold: it's a connector drag now.
+      anchorPendingRef.current = null;
+      stopFollow();
+      anchorDragRef.current = { x1: p.x, y1: p.y, fromId: p.shapeId, fromSide: p.side };
+      setArrowPreview({ x1: p.x, y1: p.y, x2: wp.x, y2: wp.y });
+    }
     if (anchorDragRef.current) {
       const a = anchorDragRef.current;
       setArrowPreview({ x1: a.x1, y1: a.y1, x2: wp.x, y2: wp.y });
+      const target = findAttractTarget(wp.x, wp.y, a.fromId);
+      setAttractTarget(target ? { id: target.id, side: resolveBinding(target.data, "auto", a.x1, a.y1).side } : null);
       return;
     }
     if (panRef.current) {
@@ -502,6 +745,8 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
       const w = screenToWorld(e.clientX, e.clientY);
       if (d.tool === "arrow") {
         setArrowPreview({ x1: d.sx, y1: d.sy, x2: w.x, y2: w.y });
+        const target = findAttractTarget(w.x, w.y);
+        setAttractTarget(target ? { id: target.id, side: resolveBinding(target.data, "auto", d.sx, d.sy).side } : null);
       } else {
         setDrawPreview({
           x: Math.min(d.sx, w.x),
@@ -514,27 +759,37 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
   }
 
   function onViewportPointerUp(e: React.PointerEvent) {
+    if (anchorPendingRef.current) {
+      // Pointer never moved past the click threshold: quick-create instead
+      // of the connector-drag flow below (Epic C).
+      const p = anchorPendingRef.current;
+      anchorPendingRef.current = null;
+      quickCreateFromAnchor(p.shapeId, p.side);
+      return;
+    }
     if (anchorDragRef.current) {
       const a = anchorDragRef.current;
       const w = screenToWorld(e.clientX, e.clientY);
       anchorDragRef.current = null;
       setArrowPreview(null);
+      setAttractTarget(null);
       // Padded past the shape's exact bounds so a drop that's a few screen
       // pixels off the edge still snaps — a strict point-in-rect test made
       // this need pixel-perfect precision to trigger at all.
-      const pad = ARROW_SNAP_PAD_PX / view.s;
-      const target = shapes.find(
-        ({ data: sd }) =>
-          w.x >= sd.x - pad && w.x <= sd.x + sd.w + pad && w.y >= sd.y - pad && w.y <= sd.y + sd.h + pad,
-      );
+      const target = findAttractTarget(w.x, w.y, a.fromId);
       let ex = w.x, ey = w.y;
+      let toBinding: Binding | undefined;
       if (target) {
-        const p = nearestBoundaryPoint(w.x, w.y, target.data.x, target.data.y, target.data.w, target.data.h);
-        ex = p.x;
-        ey = p.y;
+        const r = resolveBinding(target.data, "auto", a.x1, a.y1);
+        ex = r.point.x;
+        ey = r.point.y;
+        toBinding = { id: target.id, side: "auto" };
       }
       const len = Math.hypot(ex - a.x1, ey - a.y1);
-      if (len >= 12) addArrow(board, a.x1, a.y1, ex, ey);
+      if (len >= 12) {
+        const fromBinding: Binding | undefined = a.fromId && a.fromSide ? { id: a.fromId, side: a.fromSide } : undefined;
+        addArrow(board, a.x1, a.y1, ex, ey, { from: fromBinding, to: toBinding });
+      }
       return;
     }
     if (panRef.current) {
@@ -548,8 +803,28 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
       drawRef.current = null;
       if (d.tool === "arrow") {
         setArrowPreview(null);
+        setAttractTarget(null);
         const len = Math.hypot(w.x - d.sx, w.y - d.sy);
-        if (len >= 12) addArrow(board, d.sx, d.sy, w.x, w.y);
+        if (len >= 12) {
+          const startTarget = findAttractTarget(d.sx, d.sy);
+          const endTarget = findAttractTarget(w.x, w.y, startTarget?.id);
+          let sx = d.sx, sy = d.sy, ex = w.x, ey = w.y;
+          let fromBinding: Binding | undefined;
+          let toBinding: Binding | undefined;
+          if (startTarget) {
+            const r = resolveBinding(startTarget.data, "auto", w.x, w.y);
+            sx = r.point.x;
+            sy = r.point.y;
+            fromBinding = { id: startTarget.id, side: "auto" };
+          }
+          if (endTarget) {
+            const r = resolveBinding(endTarget.data, "auto", sx, sy);
+            ex = r.point.x;
+            ey = r.point.y;
+            toBinding = { id: endTarget.id, side: "auto" };
+          }
+          addArrow(board, sx, sy, ex, ey, { from: fromBinding, to: toBinding });
+        }
       } else {
         setDrawPreview(null);
         const x = Math.min(d.sx, w.x);
@@ -660,6 +935,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
     >
       <div className={styles.world} style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.s})` }}>
         <svg className={styles.svgLayer}>
+          <ArrowheadDefs />
           {arrows.map(({ id, data }) => (
             <ArrowItem
               key={id}
@@ -670,8 +946,15 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
               tool={tool}
               selected={selection?.kind === "arrow" && selection.id === id}
               onSelect={setSelection}
+              shapesById={shapesById}
             />
           ))}
+          {attractTarget &&
+            (() => {
+              const sd = shapesById.get(attractTarget.id);
+              if (!sd) return null;
+              return <AttractAnchors data={sd} activeSide={attractTarget.side} />;
+            })()}
           {arrowPreview && (
             <line
               x1={arrowPreview.x1}
@@ -713,7 +996,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
             selected={selection?.kind === "shape" && selection.id === id}
             onSelect={setSelection}
             registerBody={registerBody}
-            onAnchorDown={beginAnchorDrag}
+            onAnchorPointerDown={onAnchorPointerDown}
           />
         ))}
 
@@ -915,6 +1198,99 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
 // units, perpendicular to the line. `curve` is a plain offset (not an angle),
 // so it stays stable as the line's endpoints move. Drag the midpoint handle
 // (shown only while selected) to set it.
+// Floating control shown above a selected connector: routing mode (3-way),
+// thickness (4 presets, unchanged from before — just relocated here per
+// PLAN.md A4), and a start/end arrowhead style pair. Rendered via
+// <foreignObject> so it can hold plain HTML controls inside the SVG layer;
+// it lives in world coordinates same as FontToolbar (see that component's
+// note — despite the "screen space" framing in PLAN.md, FontToolbar was
+// already a descendant of the zoom-scaled `.world` div, so it scales with
+// zoom today too. This follows the same, already-established convention
+// rather than introducing a second, genuinely screen-space positioning
+// mechanism in this pass).
+function ConnectorToolbar({
+  x,
+  y,
+  routing,
+  strokeWidth,
+  headStart,
+  headEnd,
+  onChange,
+}: {
+  x: number;
+  y: number;
+  routing: Routing;
+  strokeWidth: number;
+  headStart: ArrowHead;
+  headEnd: ArrowHead;
+  onChange: (patch: Partial<ArrowData>) => void;
+}) {
+  const width = 372;
+  return (
+    <foreignObject x={x - width / 2} y={y - 76} width={width} height={40} style={{ overflow: "visible" }}>
+      <div
+        className={styles.connectorToolbar}
+        onPointerDown={(e) => e.stopPropagation()}
+        onPointerMove={(e) => e.stopPropagation()}
+        onPointerUp={(e) => e.stopPropagation()}
+      >
+        <div className={styles.ctGroup}>
+          {ROUTING_MODES.map((r) => (
+            <button key={r} className={routing === r ? styles.ftActive : ""} title={r} onClick={() => onChange({ routing: r })}>
+              {r === "straight" && (
+                <svg width={16} height={16} viewBox="0 0 24 24">
+                  <path d="M4 20L20 4" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" fill="none" />
+                </svg>
+              )}
+              {r === "curved" && (
+                <svg width={16} height={16} viewBox="0 0 24 24">
+                  <path d="M4 20Q4 4 20 4" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" fill="none" />
+                </svg>
+              )}
+              {r === "elbow" && (
+                <svg width={16} height={16} viewBox="0 0 24 24">
+                  <path d="M4 20H14V4H20" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" fill="none" />
+                </svg>
+              )}
+            </button>
+          ))}
+        </div>
+        <div className={styles.ftSep} />
+        <div className={styles.ctGroup}>
+          {ARROW_STROKE_PRESETS.map((w) => (
+            <button key={w} className={strokeWidth === w ? styles.ftActive : ""} title={`${w}px`} onClick={() => onChange({ strokeWidth: w })}>
+              <svg width={18} height={16} viewBox="0 0 20 16">
+                <line x1={2} y1={8} x2={18} y2={8} stroke="currentColor" strokeWidth={w} strokeLinecap="round" />
+              </svg>
+            </button>
+          ))}
+        </div>
+        <div className={styles.ftSep} />
+        <div className={styles.ctGroup}>
+          <span className={styles.ctLabel}>Start</span>
+          <select value={headStart} onChange={(e) => onChange({ headStart: e.target.value as ArrowHead })}>
+            {ARROW_HEAD_STYLES.map((h) => (
+              <option key={h} value={h}>
+                {h}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className={styles.ctGroup}>
+          <span className={styles.ctLabel}>End</span>
+          <select value={headEnd} onChange={(e) => onChange({ headEnd: e.target.value as ArrowHead })}>
+            {ARROW_HEAD_STYLES.map((h) => (
+              <option key={h} value={h}>
+                {h}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+    </foreignObject>
+  );
+}
+
 function ArrowItem({
   board,
   id,
@@ -923,6 +1299,7 @@ function ArrowItem({
   tool,
   selected,
   onSelect,
+  shapesById,
 }: {
   board: BoardDoc;
   id: string;
@@ -931,6 +1308,7 @@ function ArrowItem({
   tool: Tool;
   selected: boolean;
   onSelect: (s: Selection) => void;
+  shapesById: Map<string, ShapeData>;
 }) {
   type DragMode = "move" | "p1" | "p2" | "curve";
   const dragRef = useRef<{
@@ -944,32 +1322,72 @@ function ArrowItem({
     oc: number;
     moved: boolean;
   } | null>(null);
+  const [hover, setHover] = useState<{ id: string; side: Side } | null>(null);
 
-  const dx = data.x2 - data.x1;
-  const dy = data.y2 - data.y1;
+  // Epic B: resolve bound endpoints from the live shape data instead of the
+  // raw x1/y1/x2/y2 fields. Those raw fields are kept as a pure fallback —
+  // written continuously while an endpoint is dragged, read only when that
+  // endpoint has no binding (or the bound shape no longer exists).
+  const boundA = data.from ? shapesById.get(data.from.id) : undefined;
+  const boundB = data.to ? shapesById.get(data.to.id) : undefined;
+  const resolvedA = boundA && data.from ? resolveBinding(boundA, data.from.side, data.x2, data.y2) : null;
+  const resolvedB = boundB && data.to
+    ? resolveBinding(boundB, data.to.side, resolvedA ? resolvedA.point.x : data.x1, resolvedA ? resolvedA.point.y : data.y1)
+    : null;
+  const x1 = resolvedA ? resolvedA.point.x : data.x1;
+  const y1 = resolvedA ? resolvedA.point.y : data.y1;
+  const x2 = resolvedB ? resolvedB.point.x : data.x2;
+  const y2 = resolvedB ? resolvedB.point.y : data.y2;
+  const sideA = resolvedA?.side;
+  const sideB = resolvedB?.side;
+
+  const dx = x2 - x1;
+  const dy = y2 - y1;
   const len = Math.hypot(dx, dy) || 1;
   const nx = -dy / len;
   const ny = dx / len;
   const curve = data.curve ?? 0;
-  const cx = (data.x1 + data.x2) / 2 + nx * curve;
-  const cy = (data.y1 + data.y2) / 2 + ny * curve;
+  const curveCx = (x1 + x2) / 2 + nx * curve;
+  const curveCy = (y1 + y2) / 2 + ny * curve;
   const strokeWidth = data.strokeWidth ?? ARROW_STROKE_DEFAULT;
+  const headStart = data.headStart ?? "none";
+  const headEnd = data.headEnd ?? "arrow";
+  const routing: Routing = data.routing ?? (curve !== 0 ? "curved" : "straight");
+
+  let pathD: string;
+  let midX: number;
+  let midY: number;
+  if (routing === "elbow") {
+    const pts = elbowPoints({ x: x1, y: y1 }, { x: x2, y: y2 }, sideA, sideB);
+    pathD = roundedPath(pts);
+    const mid = elbowMidpoint(pts);
+    midX = mid.x;
+    midY = mid.y;
+  } else if (routing === "curved") {
+    pathD = `M ${x1} ${y1} Q ${curveCx} ${curveCy} ${x2} ${y2}`;
+    midX = curveCx;
+    midY = curveCy;
+  } else {
+    pathD = `M ${x1} ${y1} L ${x2} ${y2}`;
+    midX = (x1 + x2) / 2;
+    midY = (y1 + y2) / 2;
+  }
+
+  function findHoverTarget(px: number, py: number) {
+    const pad = ARROW_SNAP_PAD_PX / view.s;
+    for (const [sid, sd] of shapesById) {
+      if (px >= sd.x - pad && px <= sd.x + sd.w + pad && py >= sd.y - pad && py <= sd.y + sd.h + pad) {
+        return { id: sid, side: resolveBinding(sd, "auto", px, py).side };
+      }
+    }
+    return null;
+  }
 
   function beginDrag(mode: DragMode) {
     return (e: React.PointerEvent) => {
       e.stopPropagation();
       e.preventDefault();
-      dragRef.current = {
-        mode,
-        sx: e.clientX,
-        sy: e.clientY,
-        ox1: data.x1,
-        oy1: data.y1,
-        ox2: data.x2,
-        oy2: data.y2,
-        oc: curve,
-        moved: false,
-      };
+      dragRef.current = { mode, sx: e.clientX, sy: e.clientY, ox1: x1, oy1: y1, ox2: x2, oy2: y2, oc: curve, moved: false };
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     };
   }
@@ -978,14 +1396,31 @@ function ArrowItem({
     if (!s) return;
     const ddx = (e.clientX - s.sx) / view.s;
     const ddy = (e.clientY - s.sy) / view.s;
+    const wasIdle = !s.moved;
     if (Math.abs(ddx) + Math.abs(ddy) > 2) s.moved = true;
     if (!s.moved) return;
+    // The instant a bound endpoint starts actually moving (not just a
+    // click), drop its binding so the line follows the cursor immediately;
+    // it re-binds on release if dropped near a shape (see onDragUp).
+    if (wasIdle) {
+      if (s.mode === "p1" && data.from) updateFields(board.doc, board.arrows, id, { from: undefined });
+      if (s.mode === "p2" && data.to) updateFields(board.doc, board.arrows, id, { to: undefined });
+    }
     if (s.mode === "move") {
-      updateFields(board.doc, board.arrows, id, { x1: s.ox1 + ddx, y1: s.oy1 + ddy, x2: s.ox2 + ddx, y2: s.oy2 + ddy });
+      // Dragging the whole line only makes sense when neither end is
+      // bound — a bound endpoint is driven by its shape, so a line with
+      // any binding doesn't translate as a unit.
+      if (!boundA && !boundB) {
+        updateFields(board.doc, board.arrows, id, { x1: s.ox1 + ddx, y1: s.oy1 + ddy, x2: s.ox2 + ddx, y2: s.oy2 + ddy });
+      }
     } else if (s.mode === "p1") {
-      updateFields(board.doc, board.arrows, id, { x1: s.ox1 + ddx, y1: s.oy1 + ddy });
+      const wx = s.ox1 + ddx, wy = s.oy1 + ddy;
+      updateFields(board.doc, board.arrows, id, { x1: wx, y1: wy });
+      setHover(findHoverTarget(wx, wy));
     } else if (s.mode === "p2") {
-      updateFields(board.doc, board.arrows, id, { x2: s.ox2 + ddx, y2: s.oy2 + ddy });
+      const wx = s.ox2 + ddx, wy = s.oy2 + ddy;
+      updateFields(board.doc, board.arrows, id, { x2: wx, y2: wy });
+      setHover(findHoverTarget(wx, wy));
     } else {
       const delta = ddx * nx + ddy * ny; // scalar drag projected onto the normal
       updateFields(board.doc, board.arrows, id, { curve: s.oc + delta });
@@ -995,7 +1430,17 @@ function ArrowItem({
     const s = dragRef.current;
     dragRef.current = null;
     (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-    if (s && !s.moved) onSelect({ kind: "arrow", id });
+    if (!s) return;
+    if (!s.moved) {
+      onSelect({ kind: "arrow", id });
+      return;
+    }
+    if (s.mode === "p1" || s.mode === "p2") {
+      if (hover) {
+        updateFields(board.doc, board.arrows, id, { [s.mode === "p1" ? "from" : "to"]: { id: hover.id, side: "auto" } as Binding });
+      }
+      setHover(null);
+    }
   }
 
   function onPathDown(e: React.PointerEvent) {
@@ -1008,53 +1453,48 @@ function ArrowItem({
   return (
     <>
       <path
-        d={`M ${data.x1} ${data.y1} Q ${cx} ${cy} ${data.x2} ${data.y2}`}
+        d={pathD}
         fill="none"
         stroke="var(--stroke-ink)"
         strokeWidth={strokeWidth}
         strokeLinecap="round"
+        strokeLinejoin="round"
+        markerStart={headStart !== "none" ? `url(#${arrowheadMarkerId(headStart)})` : undefined}
+        markerEnd={headEnd !== "none" ? `url(#${arrowheadMarkerId(headEnd)})` : undefined}
         className={`${styles.arrow} ${selected ? styles.selected : ""}`}
         onPointerDown={onPathDown}
         onPointerMove={onDragMove}
         onPointerUp={onDragUp}
       />
+      {hover &&
+        (() => {
+          const sd = shapesById.get(hover.id);
+          return sd ? <AttractAnchors data={sd} activeSide={hover.side} /> : null;
+        })()}
       {selected && (
         <>
-          <circle cx={cx} cy={cy} r={6} className={styles.curveHandle} onPointerDown={beginDrag("curve")} onPointerMove={onDragMove} onPointerUp={onDragUp} />
-          <circle cx={data.x1} cy={data.y1} r={6} className={styles.endHandle} onPointerDown={beginDrag("p1")} onPointerMove={onDragMove} onPointerUp={onDragUp} />
-          <circle cx={data.x2} cy={data.y2} r={6} className={styles.endHandle} onPointerDown={beginDrag("p2")} onPointerMove={onDragMove} onPointerUp={onDragUp} />
-          <g transform={`translate(${cx - (ARROW_STROKE_PRESETS.length * 22) / 2}, ${cy - 40})`}>
-            <rect
-              x={-6}
-              y={-13}
-              width={ARROW_STROKE_PRESETS.length * 22 + 12}
-              height={26}
-              rx={7}
-              className={styles.arrowThicknessBar}
+          {routing === "curved" && (
+            <circle
+              cx={curveCx}
+              cy={curveCy}
+              r={6}
+              className={styles.curveHandle}
+              onPointerDown={beginDrag("curve")}
+              onPointerMove={onDragMove}
+              onPointerUp={onDragUp}
             />
-            {ARROW_STROKE_PRESETS.map((w, i) => (
-              <g
-                key={w}
-                onPointerDown={(e) => {
-                  e.stopPropagation();
-                  updateFields(board.doc, board.arrows, id, { strokeWidth: w });
-                }}
-                style={{ cursor: "pointer" }}
-              >
-                <rect x={i * 22} y={-10} width={20} height={20} fill="transparent" />
-                <line
-                  x1={i * 22 + 3}
-                  y1={0}
-                  x2={i * 22 + 17}
-                  y2={0}
-                  stroke="var(--ink)"
-                  strokeWidth={w}
-                  strokeLinecap="round"
-                  opacity={strokeWidth === w ? 1 : 0.35}
-                />
-              </g>
-            ))}
-          </g>
+          )}
+          <circle cx={x1} cy={y1} r={6} className={styles.endHandle} onPointerDown={beginDrag("p1")} onPointerMove={onDragMove} onPointerUp={onDragUp} />
+          <circle cx={x2} cy={y2} r={6} className={styles.endHandle} onPointerDown={beginDrag("p2")} onPointerMove={onDragMove} onPointerUp={onDragUp} />
+          <ConnectorToolbar
+            x={midX}
+            y={midY}
+            routing={routing}
+            strokeWidth={strokeWidth}
+            headStart={headStart}
+            headEnd={headEnd}
+            onChange={(patch) => updateFields(board.doc, board.arrows, id, patch)}
+          />
         </>
       )}
     </>
@@ -1121,7 +1561,7 @@ function NoteItem({
             bodyRef.current = el;
           }}
           className={styles.noteBody}
-          style={{ fontSize, fontFamily: FONT_STACK[data.fontFamily ?? "ui"] }}
+          style={{ fontSize, fontFamily: FONT_STACK[data.fontFamily ?? "ui"], textAlign: data.textAlign ?? "left" }}
           contentEditable
           suppressContentEditableWarning
           onBlur={(e) => updateFields(board.doc, board.notes, id, { body: e.currentTarget.textContent ?? "" })}
@@ -1138,6 +1578,7 @@ function NoteItem({
           y={data.y}
           fontSize={fontSize}
           fontFamily={data.fontFamily ?? "ui"}
+          textAlign={data.textAlign ?? "left"}
           onChange={(patch) => updateFields(board.doc, board.notes, id, patch)}
         />
       )}
@@ -1156,7 +1597,7 @@ function ShapeItem({
   selected,
   onSelect,
   registerBody,
-  onAnchorDown,
+  onAnchorPointerDown,
 }: {
   board: BoardDoc;
   id: string;
@@ -1166,12 +1607,13 @@ function ShapeItem({
   selected: boolean;
   onSelect: (s: Selection) => void;
   registerBody: (id: string, el: HTMLElement | null) => void;
-  onAnchorDown: (x: number, y: number) => void;
+  onAnchorPointerDown: (shapeId: string, side: Side, x: number, y: number, clientX: number, clientY: number) => void;
 }) {
   const bodyRef = useRef<HTMLElement | null>(null);
   const drag = useSimpleDrag(board, board.shapes, "shape", id, data.x, data.y, view, tool, onSelect, bodyRef);
   const c = NOTE_COLORS[data.color] ?? NOTE_COLORS[0];
   const fontSize = data.fontSize ?? 14;
+  const [hoverSide, setHoverSide] = useState<Side | null>(null);
 
   // Auto-grow: whenever the (unrotated) text content needs more height than
   // the shape currently has, grow the shape to fit. Only grows — a manual
@@ -1191,15 +1633,35 @@ function ShapeItem({
     return () => ro.disconnect();
   }, [board, id]);
 
-  const anchors: { side: string; x: number; y: number }[] = [
+  const anchors: { side: Side; x: number; y: number }[] = [
     { side: "n", x: data.x + data.w / 2, y: data.y },
     { side: "e", x: data.x + data.w, y: data.y + data.h / 2 },
     { side: "s", x: data.x + data.w / 2, y: data.y + data.h },
     { side: "w", x: data.x, y: data.y + data.h / 2 },
   ];
 
+  // Epic C ghost preview: where a quick-create click on `hoverSide` would
+  // place the new shape — same offset PLAN.md specifies (shape extent + a
+  // gap), no collision stepping (that's a create-time concern, not worth
+  // previewing).
+  const ghost = (() => {
+    if (!hoverSide) return null;
+    let gx = data.x, gy = data.y;
+    if (hoverSide === "e") gx += data.w + QUICK_CREATE_GAP;
+    else if (hoverSide === "w") gx -= data.w + QUICK_CREATE_GAP;
+    else if (hoverSide === "s") gy += data.h + QUICK_CREATE_GAP;
+    else gy -= data.h + QUICK_CREATE_GAP;
+    return { x: gx, y: gy };
+  })();
+
   return (
     <>
+      {ghost && (
+        <div
+          className={styles.anchorGhost}
+          style={{ left: ghost.x, top: ghost.y, width: data.w, height: data.h, borderRadius: data.kind === "ellipse" ? "50%" : 8 }}
+        />
+      )}
       <div
         className={`${styles.shape} ${styles[data.kind]} ${selected ? styles.selected : ""}`}
         style={{ left: data.x, top: data.y, width: data.w, height: data.h, borderColor: c.bg, background: `${c.bg}2e` }}
@@ -1211,7 +1673,7 @@ function ShapeItem({
             bodyRef.current = el;
           }}
           className={styles.shapeBody}
-          style={{ fontSize, fontFamily: FONT_STACK[data.fontFamily ?? "ui"] }}
+          style={{ fontSize, fontFamily: FONT_STACK[data.fontFamily ?? "ui"], textAlign: data.textAlign ?? "center" }}
           contentEditable
           suppressContentEditableWarning
           onBlur={(e) => updateFields(board.doc, board.shapes, id, { body: e.currentTarget.textContent ?? "" })}
@@ -1223,13 +1685,18 @@ function ShapeItem({
             <div
               key={a.side}
               className={`${styles.anchor} ${styles["a-" + a.side]}`}
+              onPointerEnter={() => setHoverSide(a.side)}
+              onPointerLeave={() => setHoverSide((s) => (s === a.side ? null : s))}
               onPointerDown={(e) => {
                 e.stopPropagation();
                 e.preventDefault();
                 (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-                onAnchorDown(a.x, a.y);
+                onAnchorPointerDown(id, a.side, a.x, a.y, e.clientX, e.clientY);
               }}
-            />
+              onPointerUp={() => setHoverSide(null)}
+            >
+              <span className={styles.anchorPlus}>+</span>
+            </div>
           ))}
       </div>
       {selected && (
@@ -1249,6 +1716,7 @@ function ShapeItem({
             y={data.y}
             fontSize={fontSize}
             fontFamily={data.fontFamily ?? "ui"}
+            textAlign={data.textAlign ?? "center"}
             onChange={(patch) => updateFields(board.doc, board.shapes, id, patch)}
           />
         </>
@@ -1288,7 +1756,7 @@ function TextItem({
             bodyRef.current = el;
           }}
           className={styles.textBody}
-          style={{ fontSize, fontFamily: FONT_STACK[data.fontFamily ?? "ui"] }}
+          style={{ fontSize, fontFamily: FONT_STACK[data.fontFamily ?? "ui"], textAlign: data.textAlign ?? "left" }}
           contentEditable
           suppressContentEditableWarning
           onBlur={(e) => updateFields(board.doc, board.texts, id, { body: e.currentTarget.textContent ?? "" })}
@@ -1302,6 +1770,7 @@ function TextItem({
           y={data.y}
           fontSize={fontSize}
           fontFamily={data.fontFamily ?? "ui"}
+          textAlign={data.textAlign ?? "left"}
           onChange={(patch) => updateFields(board.doc, board.texts, id, patch)}
         />
       )}

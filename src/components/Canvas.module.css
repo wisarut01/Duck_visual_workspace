@@ -138,12 +138,41 @@
   transition: opacity 0.12s;
   pointer-events: none;
   z-index: 6;
+  display: grid;
+  place-items: center;
+  cursor: crosshair;
 }
 .shape:hover .anchor { opacity: 1; pointer-events: auto; }
-.a-n { top: -7px; left: 50%; transform: translateX(-50%); cursor: crosshair; }
-.a-s { bottom: -7px; left: 50%; transform: translateX(-50%); cursor: crosshair; }
-.a-e { right: -7px; top: 50%; transform: translateY(-50%); cursor: crosshair; }
-.a-w { left: -7px; top: 50%; transform: translateY(-50%); cursor: crosshair; }
+.a-n { top: -7px; left: 50%; transform: translateX(-50%); }
+.a-s { bottom: -7px; left: 50%; transform: translateX(-50%); }
+.a-e { right: -7px; top: 50%; transform: translateY(-50%); }
+.a-w { left: -7px; top: 50%; transform: translateY(-50%); }
+/* Reads as "create" rather than "drag a line" until the pointer actually
+   moves (Epic C: click vs drag). */
+.anchorPlus {
+  font: 700 10px/1 var(--font-mono);
+  color: var(--accent);
+  transform: translateY(-0.5px);
+}
+/* Ghost preview of the shape a quick-create click would place — same
+   dashed-outline language as drawPreview. */
+.anchorGhost {
+  position: absolute;
+  border: 2px dashed var(--accent);
+  opacity: 0.45;
+  pointer-events: none;
+  z-index: 4;
+}
+
+/* The diamond's shape div is a square rotated 45deg (see .shape.diamond
+   above); its bounding-box edge midpoints (where .a-n/.a-e/.a-s/.a-w sit by
+   default) land near the rotated square's edges, not its visual tips. The
+   NW/NE/SE/SW corners of the *unrotated* box are what rotate onto the true
+   N/E/S/W tips, so diamonds reposition anchors there instead. */
+.shape.diamond .a-n { top: -7px; left: -7px; transform: none; }
+.shape.diamond .a-e { top: -7px; right: -7px; transform: none; }
+.shape.diamond .a-s { bottom: -7px; right: -7px; transform: none; }
+.shape.diamond .a-w { bottom: -7px; left: -7px; transform: none; }
 
 /* ---- font toolbar (note/shape/text, shown while selected) ---- */
 .fontToolbar {
@@ -195,6 +224,54 @@
   stroke: var(--panel-border);
   stroke-width: 1;
   pointer-events: none;
+}
+
+/* ---- unified connector toolbar (Epic A4) ---- */
+.connectorToolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  margin: 0 auto;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  box-shadow: var(--panel-shadow);
+  border-radius: 8px;
+  padding: 4px 6px;
+  font: 600 11px/1 var(--font-mono);
+  color: var(--ink-soft);
+  white-space: nowrap;
+  pointer-events: auto;
+}
+.connectorToolbar button {
+  height: 22px;
+  min-width: 22px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.connectorToolbar button:hover { background: var(--hair); color: var(--ink); }
+.connectorToolbar select {
+  height: 20px;
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--ink);
+  font: 600 10px/1 var(--font-mono);
+  text-transform: capitalize;
+}
+.ctGroup { display: flex; align-items: center; gap: 2px; }
+.ctLabel {
+  font: 600 9px/1 var(--font-mono);
+  color: var(--ink-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-right: 2px;
 }
 
 /* ---- text ---- */

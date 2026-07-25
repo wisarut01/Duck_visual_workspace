@@ -11,6 +11,28 @@ export type ShapeKind = "rect" | "ellipse" | "diamond";
 
 export type FontFamily = "ui" | "mono";
 
+// Epic D: text alignment. Optional everywhere — an absent value falls back
+// to whatever each element type already renders today (left for
+// notes/text, center for shapes), so existing boards don't shift.
+export type TextAlign = "left" | "center" | "right";
+
+// Epic A2: arrowhead styles, one per end.
+export type ArrowHead = "none" | "arrow" | "triangle" | "circle" | "diamond";
+
+// Epic A3: connector routing mode.
+export type Routing = "straight" | "curved" | "elbow";
+
+// Epic B: which shape (and which side of it) a connector endpoint is bound
+// to. `side: "auto"` re-picks the nearest-facing side every render as the
+// bound shape (or the other endpoint) moves; a concrete side sticks to that
+// side regardless of relative position (set when the user drags out from a
+// specific anchor dot).
+export type Side = "n" | "e" | "s" | "w";
+export interface Binding {
+  id: string;
+  side: Side | "auto";
+}
+
 export interface NoteData {
   x: number;
   y: number;
@@ -20,6 +42,7 @@ export interface NoteData {
   votes: number;
   fontSize?: number;
   fontFamily?: FontFamily;
+  textAlign?: TextAlign;
 }
 export interface ShapeData {
   kind: ShapeKind;
@@ -31,6 +54,7 @@ export interface ShapeData {
   body: string;
   fontSize?: number;
   fontFamily?: FontFamily;
+  textAlign?: TextAlign;
 }
 export interface TextData {
   x: number;
@@ -38,6 +62,7 @@ export interface TextData {
   body: string;
   fontSize?: number;
   fontFamily?: FontFamily;
+  textAlign?: TextAlign;
 }
 export interface FrameData {
   x: number;
@@ -53,6 +78,19 @@ export interface ArrowData {
   y2: number;
   curve?: number;
   strokeWidth?: number;
+  // Epic A2 — default (undefined) renders as the original look: no
+  // arrowhead at the start, a plain arrow at the end.
+  headStart?: ArrowHead;
+  headEnd?: ArrowHead;
+  // Epic A3 — undefined defaults to "curved" when `curve` is non-zero
+  // (preserves existing saved arrows), else "straight".
+  routing?: Routing;
+  // Epic B — undefined means "frozen world coords", i.e. today's behavior.
+  // x1/y1/x2/y2 are kept up to date as a fallback/last-known position for
+  // unbinding and for clients that don't understand bindings; the live
+  // render always prefers the bound shape's current position when present.
+  from?: Binding;
+  to?: Binding;
 }
 
 export interface BoardDoc {
@@ -152,9 +190,16 @@ export function addFrame(b: BoardDoc, x: number, y: number, w: number, h: number
   return id;
 }
 
-export function addArrow(b: BoardDoc, x1: number, y1: number, x2: number, y2: number): string {
+export function addArrow(
+  b: BoardDoc,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  extra?: Partial<ArrowData>,
+): string {
   const id = newId("arrow");
-  put(b.doc, b.arrows, id, { x1, y1, x2, y2 } satisfies ArrowData);
+  put(b.doc, b.arrows, id, { x1, y1, x2, y2, ...extra } satisfies ArrowData);
   return id;
 }
 
