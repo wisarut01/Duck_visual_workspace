@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { login } from "@/lib/api";
+import ThemeToggle from "@/components/ThemeToggle";
 
 function LoginForm() {
   const router = useRouter();
@@ -59,6 +60,9 @@ function LoginForm() {
           C
         </span>
         <b style={{ fontSize: 16, letterSpacing: "-0.01em" }}>Log in</b>
+        <div style={{ marginLeft: "auto" }}>
+          <ThemeToggle />
+        </div>
       </div>
 
       <input
@@ -78,7 +82,7 @@ function LoginForm() {
         style={inputStyle}
       />
 
-      {error && <p style={{ margin: 0, font: "600 12px/1.4 var(--font-ui)", color: "#c0392b" }}>{error}</p>}
+      {error && <p style={{ margin: 0, font: "600 12px/1.4 var(--font-ui)", color: "var(--danger)" }}>{error}</p>}
 
       <button type="submit" disabled={busy} style={buttonStyle}>
         {busy ? "Logging in…" : "Log in"}

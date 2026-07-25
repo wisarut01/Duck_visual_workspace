@@ -35,6 +35,7 @@ import {
 } from "@/lib/board-doc";
 import { useYCollection } from "@/hooks/useYCollection";
 import { elbowPoints, roundedPath, elbowMidpoint } from "@/lib/connector-path";
+import ThemeToggle from "./ThemeToggle";
 import type { WebsocketProvider } from "y-websocket";
 
 type ConnState = "connecting" | "connected" | "disconnected";
@@ -1083,6 +1084,8 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
         >
           {linkCopied ? "Copied!" : "Share"}
         </button>
+
+        <ThemeToggle />
 
         <div className={`${topbarStyles.tbGroup} ${topbarStyles.presence}`}>
           <span
