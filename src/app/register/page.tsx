@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { USER_COLORS } from "@/lib/room";
 import { register } from "@/lib/api";
+import ThemeToggle from "@/components/ThemeToggle";
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -71,6 +72,9 @@ export default function RegisterPage() {
             C
           </span>
           <b style={{ fontSize: 16, letterSpacing: "-0.01em" }}>Sign up</b>
+          <div style={{ marginLeft: "auto" }}>
+            <ThemeToggle />
+          </div>
         </div>
 
         <input
@@ -132,7 +136,7 @@ export default function RegisterPage() {
           </div>
         </div>
 
-        {error && <p style={{ margin: 0, font: "600 12px/1.4 var(--font-ui)", color: "#c0392b" }}>{error}</p>}
+        {error && <p style={{ margin: 0, font: "600 12px/1.4 var(--font-ui)", color: "var(--danger)" }}>{error}</p>}
 
         <button type="submit" disabled={busy} style={buttonStyle}>
           {busy ? "Creating account…" : "Create account"}

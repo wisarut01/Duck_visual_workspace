@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { randomRoomId } from "@/lib/room";
 import { touchBoard } from "@/lib/api";
+import ThemeToggle from "@/components/ThemeToggle";
 
 export default function Home() {
   const router = useRouter();
@@ -64,13 +65,14 @@ export default function Home() {
             C
           </span>
           <b style={{ fontSize: 16, letterSpacing: "-0.01em" }}>Coboard</b>
-          <div style={{ marginLeft: "auto", display: "flex", gap: 12 }}>
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
             <Link href="/dashboard" style={{ font: "600 12px/1 var(--font-ui)", color: "var(--accent)", textDecoration: "none" }}>
               My boards
             </Link>
             <Link href="/login" style={{ font: "600 12px/1 var(--font-ui)", color: "var(--ink-soft)", textDecoration: "none" }}>
               Log in
             </Link>
+            <ThemeToggle />
           </div>
         </div>
 

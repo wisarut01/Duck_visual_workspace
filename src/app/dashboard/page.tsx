@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { fetchMe, listBoards, removeBoard, touchBoard, type ApiBoard, type ApiUser } from "@/lib/api";
 import { parseRoomId, randomRoomId } from "@/lib/room";
+import ThemeToggle from "@/components/ThemeToggle";
 
 function timeAgo(ts: number): string {
   const s = Math.max(1, Math.round((Date.now() - ts) / 1000));
@@ -89,6 +90,8 @@ export default function DashboardPage() {
           </Link>
 
           <div style={{ flex: 1 }} />
+
+          <ThemeToggle />
 
           <Link
             href="/profile"

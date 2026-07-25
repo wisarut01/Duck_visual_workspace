@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { USER_COLORS } from "@/lib/room";
 import { fetchMe, logout, updateProfile, type ApiUser } from "@/lib/api";
+import ThemeToggle from "@/components/ThemeToggle";
 
 export default function ProfilePage() {
   const router = useRouter();
@@ -96,6 +97,9 @@ export default function ProfilePage() {
               {user?.email}
             </span>
           </div>
+          <div style={{ marginLeft: "auto" }}>
+            <ThemeToggle />
+          </div>
         </div>
 
         <div>
@@ -166,7 +170,7 @@ export default function ProfilePage() {
           </div>
         </div>
 
-        {error && <p style={{ margin: 0, font: "600 12px/1.4 var(--font-ui)", color: "#c0392b" }}>{error}</p>}
+        {error && <p style={{ margin: 0, font: "600 12px/1.4 var(--font-ui)", color: "var(--danger)" }}>{error}</p>}
 
         <button
           type="submit"

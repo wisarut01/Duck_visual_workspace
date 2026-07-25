@@ -1,6 +1,25 @@
 @AGENTS.md
 
+## Feature workflow
+
+New feature: create new branch first, every time.
+Before code: write test case first (for new feature).
+Test suite must cover old feature + new feature both, confirm no break either side.
+Test pass → merge to main branch.
+
 ## Progress log (update as work continues)
+
+Done — light/dark theme toggle (this session):
+- Added a test runner from scratch (repo had none): `vitest` + `jsdom` + `@testing-library/react` + `@testing-library/dom` as devDeps, `npm test` → `vitest run`, config in `vitest.config.ts` (kept separate from `next.config.ts`/the Next build graph on purpose — `next build` never reads it).
+- Followed the mandated workflow: branch `feat/theme-toggle`, wrote all tests first (new-feature tests for `theme.ts`/`ThemeToggle` plus regression tests for the existing pure modules `connector-path.ts`, `room.ts`, `palette.ts`), confirmed the new-feature tests failed for the right reason (`theme.ts`/`ThemeToggle.tsx` didn't exist yet) while the regression tests passed against the untouched modules, then implemented. Final gate: 54/54 tests green, `tsc --noEmit` clean, `eslint .` clean, `next build` clean (with dummy `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY`, same pre-existing requirement as before).
+- `src/lib/theme.ts` — pure: `Theme = "light"|"dark"|"system"`, `readStored`/`writeStored` (try/catch around localStorage, same defensive pattern as `lib/profile.ts`), `resolveTheme` (maps `"system"` via `matchMedia`), `applyTheme` (stamps resolved value onto `document.documentElement.dataset.theme`), `nextTheme` (light→dark→system→light).
+- Plan correction: the plan's step 4 said to reuse JoinCard's `useSyncExternalStore` boolean-flag pattern for `ThemeToggle`'s SSR-safety, but a plain boolean flag only solves *interactivity-before-hydration* (JoinCard's actual bug). It doesn't solve the theme toggle's harder problem: the button's own displayed icon/label depends on the *value* of the stored theme, so a naive `useState(() => readStored())` initializer reads real `localStorage` on the client's first (pre-hydration) render while the server always saw `"system"` — a genuine hydration content mismatch, not just an early-click race. Fixed by extending `theme.ts` with a tiny external-store pub/sub (`subscribeTheme`/`setTheme`/`getThemeSnapshot`/`getServerThemeSnapshot`) and driving the displayed theme itself through a second `useSyncExternalStore` call (server snapshot always `"system"`, matching the no-flash script's default), in addition to the boolean mounted-flag for disabling the button pre-hydration. No `useEffect`+`setState` anywhere in the component.
+- `src/app/layout.tsx` — added a blocking inline `<script>` in a new `<head>` that duplicates `readStored`/`resolveTheme`/`applyTheme`'s logic in plain JS (can't import the TS module into a raw pre-hydration script) to set `data-theme` before first paint, `suppressHydrationWarning` on `<html>` since the script mutates it outside React's control.
+- `src/components/ThemeToggle.tsx` + `.module.css` — single icon button (☀/☾/◐) cycling the three states, styled with the existing `--panel`/`--panel-border`/`--panel-shadow`/`--ink`/`--hair` tokens (no new styling mechanism), `aria-label`/`title` both state the current theme and what a click switches to.
+- Placed on the board topbar (`Canvas.tsx`, next to Share) and on `/`, `/login`, `/register`, `/dashboard`, `/profile`.
+- Fixed the hardcoded `#c0392b` error-text color (unreadable against the dark panel background) to `var(--danger)` in `login/page.tsx`, `register/page.tsx`, `profile/page.tsx`.
+- Audited `Canvas.module.css` and `BoardShell.module.css` for other hardcoded colors: everything left (`#33240a`/`rgba(51,36,10,…)` sticky-note text, the note's own box-shadow, `#fff` on accent-colored buttons/avatars/cursor labels, the presence-dot pulse `rgba` which is just `--ok` spelled out for the `@keyframes` block) is either explicitly theme-invariant per the plan or safe in both themes as-is — none converted.
+- Merged to `main` locally; not pushed to any remote.
 
 Done — epics 1-5 (canvas core, Next.js shell, local Y.Doc, WS realtime, presence/follow).
 
