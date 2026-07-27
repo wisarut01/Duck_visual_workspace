@@ -69,6 +69,10 @@ describe("screen-space.ts (F2 — counter-scale primitive)", () => {
     it("supports a bottom-left origin (for F5's frame label)", () => {
       expect(counterScale(1, "bottom-left").transformOrigin).toBe("0% 100%");
     });
+
+    it("supports a bottom-right origin (for F5's frame delete button)", () => {
+      expect(counterScale(1, "bottom-right").transformOrigin).toBe("100% 100%");
+    });
   });
 
   describe("screenPxToWorld", () => {

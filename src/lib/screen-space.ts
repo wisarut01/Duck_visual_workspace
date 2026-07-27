@@ -11,7 +11,7 @@
 // whatever positioning transform it already has. Net on-screen scale is
 // `view.s * (1 / view.s) = 1` — constant regardless of zoom.
 
-export type ScreenSpaceOrigin = "bottom-center" | "bottom-left";
+export type ScreenSpaceOrigin = "bottom-center" | "bottom-left" | "bottom-right";
 
 export interface ScreenSpaceStyle {
   transform: string;
@@ -44,11 +44,15 @@ export function zoomInv(zoom: number): number {
  *    above the element they control.
  *  - "bottom-left": F5's frame label tab, pinned to the frame's top-left
  *    corner.
+ *  - "bottom-right": F5's frame delete button, pinned to the frame's
+ *    top-right corner (the opposite corner from the label, so the two
+ *    don't grow into each other as zoom shrinks).
  */
 export function counterScale(zoom: number, origin: ScreenSpaceOrigin = "bottom-center"): ScreenSpaceStyle {
+  const transformOrigin = origin === "bottom-left" ? "0% 100%" : origin === "bottom-right" ? "100% 100%" : "50% 100%";
   return {
     transform: `scale(${zoomInv(zoom)})`,
-    transformOrigin: origin === "bottom-left" ? "0% 100%" : "50% 100%",
+    transformOrigin,
   };
 }
 

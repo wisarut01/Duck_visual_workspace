@@ -49,39 +49,55 @@
   border-color: var(--accent);
   background: var(--accent-soft);
 }
+/* F5: positioned against the zero-size anchor div FrameItem wraps it in
+   (`left: 0; bottom: 0` — the wrapper is placed at the frame's top-left
+   corner, offset up by a constant screen gap) rather than a fixed `top`
+   offset, so the counter-scale's `transform-origin: 0% 100%` point lands
+   exactly there regardless of the label's own (variable-length!) rendered
+   size. Base size bumped (11px -> 14px font, more padding) — was cramped
+   even at zoom 1, same as F2's toolbars. */
 .flabel {
   position: absolute;
-  top: -24px;
   left: 0;
-  font: 600 11px/1 var(--font-mono);
+  bottom: 0;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  font: 600 14px/1 var(--font-mono);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--ink-soft);
   background: var(--panel);
   border: 1px solid var(--panel-border);
   border-radius: 6px;
-  padding: 5px 8px;
+  padding: 7px 12px;
   cursor: grab;
   outline: none;
   white-space: nowrap;
   pointer-events: auto;
+  box-shadow: var(--panel-shadow);
 }
+/* F5: same wrapper trick, mirrored at the frame's top-right corner
+   (`right: 0; bottom: 0`) with a bottom-right counter-scale origin so it
+   doesn't grow into the label as zoom shrinks. Bumped 20x20 opacity 0.55
+   -> 30x30 opacity 0.8, matching the label's touch-target-sized bump. */
 .del {
   position: absolute;
-  top: -26px;
   right: 0;
-  width: 20px;
-  height: 20px;
+  bottom: 0;
+  width: 30px;
+  height: 30px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 6px;
   background: var(--panel);
   border: 1px solid var(--panel-border);
   color: var(--ink-faint);
-  font-size: 13px;
+  font-size: 17px;
   line-height: 1;
   cursor: pointer;
-  opacity: 0.55;
+  opacity: 0.8;
   pointer-events: auto;
+  box-shadow: var(--panel-shadow);
 }
 .del:hover { opacity: 1; color: var(--danger); }
 

@@ -35,7 +35,7 @@ import {
 } from "@/lib/board-doc";
 import { useYCollection } from "@/hooks/useYCollection";
 import { elbowPoints, roundedPath, elbowMidpoint } from "@/lib/connector-path";
-import { toolbarStyle, centeredToolbarStyle, screenPxToWorld, zoomInv } from "@/lib/screen-space";
+import { toolbarStyle, centeredToolbarStyle, counterScale, screenPxToWorld, zoomInv } from "@/lib/screen-space";
 import ThemeToggle from "./ThemeToggle";
 import type { WebsocketProvider } from "y-websocket";
 
@@ -165,6 +165,12 @@ const FONT_TOOLBAR_GAP_PX = 8;
 const CONNECTOR_TOOLBAR_WIDTH_PX = 480;
 const CONNECTOR_TOOLBAR_HEIGHT_PX = 48;
 const CONNECTOR_TOOLBAR_GAP_PX = 20;
+// F5: same constant-screen-gap idea, for the frame label tab and delete
+// button — both pinned to a frame corner via a zero-size wrapper +
+// `bottom: 0` (see FrameItem), same reasoning as FONT_TOOLBAR_GAP_PX above
+// for why that's needed instead of a naive `top` offset.
+const FRAME_LABEL_GAP_PX = 6;
+const FRAME_DEL_GAP_PX = 6;
 // A small extension of React.CSSProperties for the one CSS custom property
 // this file sets from JS: `--zoom-inv` (1/view.s), read by
 // Canvas.module.css's `.anchor`/`.resizeHandle`/`.a-*` rules to counter-
@@ -1908,7 +1914,26 @@ interface FrameMember {
   y: number;
 }
 
-function FrameItem({
+// F5: the frame's "×" is today the only on-canvas delete affordance
+// (everything else requires the Backspace key, which doesn't exist on a
+// phone). PLAN.md's F4 generalizes this to every selected object; this is
+// intentionally left small (a style + a click handler) so that lift is just
+// "call it from more places," not a rewrite — F4 owns the generalization,
+// not this pass.
+function DeleteButton({ zoom, onDelete }: { zoom: number; onDelete: () => void }) {
+  return (
+    <button
+      className={styles.del}
+      style={counterScale(zoom, "bottom-right")}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={onDelete}
+    >
+      ×
+    </button>
+  );
+}
+
+export function FrameItem({
   board,
   id,
   data,
@@ -2032,34 +2057,57 @@ function FrameItem({
     if (s && !s.moved) onSelect({ kind: "frame", id });
   }
 
+  // F5: label/delete both counter-scale (constant on-screen size at any
+  // zoom) and are pinned via a zero-size anchor wrapper + CSS `bottom: 0`
+  // (label) / `bottom: 0; right: 0` (delete), same trick FontToolbar and
+  // ConnectorToolbar use and for the same reason — it lands the
+  // transform-origin point exactly, with no dependency on the label's own
+  // (variable-length!) rendered width or height. The label's origin is
+  // bottom-LEFT so the frame's actual top-left corner — the wrapper's own
+  // position, computed below — stays pinned as the label grows/shrinks;
+  // the delete button mirrors that at bottom-RIGHT, off the frame's
+  // top-right corner, so the two don't grow into each other.
+  const labelAnchorStyle: React.CSSProperties = {
+    position: "absolute",
+    left: 0,
+    top: -screenPxToWorld(FRAME_LABEL_GAP_PX, view.s),
+    width: 0,
+    height: 0,
+  };
+  const delAnchorStyle: React.CSSProperties = {
+    position: "absolute",
+    right: 0,
+    top: -screenPxToWorld(FRAME_DEL_GAP_PX, view.s),
+    width: 0,
+    height: 0,
+  };
   return (
     <>
       <div
         className={`${styles.frame} ${selected ? styles.selected : ""}`}
         style={{ left: data.x, top: data.y, width: data.w, height: data.h }}
       >
-        <div
-          ref={(el) => {
-            registerBody(id, el);
-            bodyRef.current = el;
-          }}
-          className={styles.flabel}
-          contentEditable
-          suppressContentEditableWarning
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onBlur={(e) => updateFields(board.doc, board.frames, id, { label: e.currentTarget.textContent ?? "" })}
-        >
-          {data.label}
+        <div style={labelAnchorStyle}>
+          <div
+            ref={(el) => {
+              registerBody(id, el);
+              bodyRef.current = el;
+            }}
+            className={styles.flabel}
+            style={counterScale(view.s, "bottom-left")}
+            contentEditable
+            suppressContentEditableWarning
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            onBlur={(e) => updateFields(board.doc, board.frames, id, { label: e.currentTarget.textContent ?? "" })}
+          >
+            {data.label}
+          </div>
         </div>
-        <button
-          className={styles.del}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={() => deleteObj(board.doc, board.frames, id)}
-        >
-          ×
-        </button>
+        <div style={delAnchorStyle}>
+          <DeleteButton zoom={view.s} onDelete={() => deleteObj(board.doc, board.frames, id)} />
+        </div>
       </div>
       {selected && (
         <ResizeHandles
