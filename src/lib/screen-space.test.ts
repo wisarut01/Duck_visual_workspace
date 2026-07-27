@@ -1,6 +1,6 @@
 // New-feature tests for F2 (screen-space toolbars). See PLAN.md "F2".
 import { describe, it, expect } from "vitest";
-import { counterScale, safeZoom, zoomInv, screenPxToWorld, toolbarStyle } from "./screen-space";
+import { counterScale, safeZoom, zoomInv, screenPxToWorld, toolbarStyle, centeredToolbarStyle } from "./screen-space";
 
 describe("screen-space.ts (F2 — counter-scale primitive)", () => {
   describe("safeZoom", () => {
@@ -94,6 +94,28 @@ describe("screen-space.ts (F2 — counter-scale primitive)", () => {
     it("matches counterScale's output (stable public alias for toolbar callers)", () => {
       expect(toolbarStyle(0.5)).toEqual(counterScale(0.5));
       expect(toolbarStyle(2, "bottom-left")).toEqual(counterScale(2, "bottom-left"));
+    });
+  });
+
+  // FIX 1 (coordinator review of F2): ConnectorToolbar's inner div is
+  // positioned with CSS `left: 50%; bottom: 0` against a wrapper that fills
+  // its <foreignObject> box (not flexbox, which foreignObject doesn't
+  // reliably honor) — see Canvas.tsx's ConnectorToolbar. It needs the
+  // counter-scale composed with a `translateX(-50%)` so the div's own
+  // horizontal centering survives the scale.
+  describe("centeredToolbarStyle", () => {
+    it("prefixes the counter-scale with translateX(-50%)", () => {
+      const s = centeredToolbarStyle(1);
+      expect(s.transform).toBe("translateX(-50%) scale(1)");
+    });
+
+    it("scales like counterScale at other zooms", () => {
+      expect(centeredToolbarStyle(0.5).transform).toBe("translateX(-50%) scale(2)");
+      expect(centeredToolbarStyle(2).transform).toBe("translateX(-50%) scale(0.5)");
+    });
+
+    it("uses a bottom-center transform-origin", () => {
+      expect(centeredToolbarStyle(1).transformOrigin).toBe("50% 100%");
     });
   });
 });

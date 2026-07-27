@@ -73,3 +73,26 @@ export function toolbarStyle(zoom: number, origin: ScreenSpaceOrigin = "bottom-c
 export function screenPxToWorld(px: number, zoom: number): number {
   return px * zoomInv(zoom);
 }
+
+/**
+ * Same counter-scale as toolbarStyle(), composed with `translateX(-50%)`
+ * for a toolbar that's horizontally centered via CSS `left: 50%; bottom: 0`
+ * against a wrapper that fills its container (see ConnectorToolbar in
+ * Canvas.tsx, and the `.a-*` CSS rules for the same translate+scale
+ * composition pattern used elsewhere in this feature). `translateX(-50%)`
+ * is a fixed offset — half the element's own *unscaled* layout width,
+ * unaffected by the scale — and `scale()`'s default transform-origin
+ * (here pinned to `transformOrigin: "50% 100%"`, this element's own
+ * bottom-center) doesn't move that center under scaling either. So the
+ * element's horizontal center lands on, and stays on, the wrapper's
+ * midpoint at any zoom, while its bottom edge (0 in the wrapper, an exact
+ * position independent of the element's own height) stays pinned to the
+ * wrapper's bottom edge — no dependency on the toolbar's actual rendered
+ * size in either axis.
+ */
+export function centeredToolbarStyle(zoom: number): ScreenSpaceStyle {
+  return {
+    transform: `translateX(-50%) scale(${zoomInv(zoom)})`,
+    transformOrigin: "50% 100%",
+  };
+}

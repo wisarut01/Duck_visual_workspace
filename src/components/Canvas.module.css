@@ -195,8 +195,14 @@
    min 36x32px, font 12->13px. The element itself is counter-scaled (inline
    `transform`/`transformOrigin` from src/lib/screen-space.ts, applied by
    FontToolbar in Canvas.tsx) so this on-screen size holds at any zoom. */
+/* Positioned against the zero-size anchor div FontToolbar wraps it in (see
+   Canvas.tsx) — `bottom: 0` pins this element's own bottom edge (i.e. the
+   counter-scale's `transform-origin: 50% 100%` point) exactly to that
+   anchor, independent of this element's actual rendered height. */
 .fontToolbar {
   position: absolute;
+  left: 0;
+  bottom: 0;
   display: flex;
   align-items: center;
   gap: 3px;
@@ -253,15 +259,20 @@
    select to min-height 32px / font 13px. The wrapping <div> (not the
    <foreignObject> itself — see ConnectorToolbar in Canvas.tsx) carries the
    inline counter-scale transform, same primitive as FontToolbar. */
+/* Positioned against the `position: relative` wrapper that fills the
+   <foreignObject> box (see Canvas.tsx) — `left: 50%; bottom: 0` plus the
+   inline `centeredToolbarStyle()` transform (`translateX(-50%)
+   scale(1/zoom)`) bottom-center-anchors this div at any zoom. Plain CSS
+   positioning, not flexbox on the foreignObject — that isn't reliably
+   honored across engines (see the comment above ConnectorToolbar). */
 .connectorToolbar {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
   display: flex;
   align-items: center;
   gap: 5px;
   width: fit-content;
-  /* Horizontal/vertical centering is now the <foreignObject>'s job
-     (display:flex + align-items:flex-end + justify-content:center, set
-     inline by ConnectorToolbar — F2) since that box is no longer a snug
-     fit around this div at every zoom. No margin:auto needed here. */
   background: var(--panel);
   border: 1px solid var(--panel-border);
   box-shadow: var(--panel-shadow);
