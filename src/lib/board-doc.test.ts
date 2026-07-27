@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createBoardDoc, addShape, addNote, addText, updateFields } from "./board-doc";
+import { createBoardDoc, addShape, addNote, addText, updateFields, deleteObj } from "./board-doc";
 
 describe("board-doc.ts — F3 shape styling (color/strokeWidth/filled round-trip)", () => {
   it("addShape defaults have no strokeWidth/filled set (undefined = today's rendering)", () => {
@@ -69,5 +69,25 @@ describe("board-doc.ts — F6 text styling (bold/italic/underline/textColor roun
     expect(b.shapes.get(shapeId)!.get("textColor")).toBe(0);
     expect(b.texts.get(textId)!.get("underline")).toBe(true);
     expect(b.texts.get(textId)!.get("textColor")).toBe(5);
+  });
+});
+
+describe("board-doc.ts — F4 delete + undo contract", () => {
+  it("deleteObj removes the object, and undoManager.undo() restores it", () => {
+    const b = createBoardDoc();
+    const id = addShape(b, "rect", 0, 0, 100, 100, 0);
+    expect(b.shapes.size).toBe(1);
+    // Without this, the create and the delete below (a synchronous test,
+    // unlike real usage where some time passes in between) fall inside the
+    // same 500ms captureTimeout window and merge into a single undo step —
+    // undoing "create-then-delete" as one unit nets back to zero shapes,
+    // not one. stopCapturing() forces them into separate undo steps, same
+    // as what naturally happens once a user does anything else in between.
+    b.undoManager.stopCapturing();
+    deleteObj(b.doc, b.shapes, id);
+    expect(b.shapes.size).toBe(0);
+    b.undoManager.undo();
+    expect(b.shapes.size).toBe(1);
+    expect(b.shapes.get(id)).toBeTruthy();
   });
 });

@@ -214,6 +214,7 @@ export function ElementToolbar({
   underline,
   textColor,
   onChange,
+  onDelete,
 }: {
   x: number;
   y: number;
@@ -228,6 +229,7 @@ export function ElementToolbar({
   italic?: boolean;
   underline?: boolean;
   textColor?: number;
+  onDelete?: () => void;
   onChange: (patch: {
     fontSize?: number;
     fontFamily?: import("@/lib/board-doc").FontFamily;
@@ -375,6 +377,22 @@ export function ElementToolbar({
           />
         ))}
       </div>
+      {onDelete && (
+        <div className={styles.ctDeleteGroup}>
+          <button className={styles.deleteBtn} title="Delete" onClick={onDelete}>
+            <svg width={15} height={15} viewBox="0 0 24 24">
+              <path
+                d="M5 6h14M9 6V4h6v2M7 6l1 14h8l1-14"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -748,6 +766,26 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
   const [selection, setSelection] = useState<Selection>(null);
   const [justCreated, setJustCreated] = useState<string | null>(null);
 
+  // F4: single delete path shared by the keyboard shortcut and every
+  // on-canvas delete button (ElementToolbar, ConnectorToolbar, frame's
+  // `.del`), so undo grouping and selection-clearing can't drift apart
+  // between call sites the way duplicated delete logic invites.
+  const deleteSelection = useCallback(
+    (sel: Selection) => {
+      if (!sel) return;
+      const containers: Record<ObjKind, NoteKind> = {
+        note: board.notes,
+        shape: board.shapes,
+        text: board.texts,
+        frame: board.frames,
+        arrow: board.arrows,
+      };
+      deleteObj(board.doc, containers[sel.kind], sel.id);
+      setSelection(null);
+    },
+    [board],
+  );
+
   const bodyRefs = useRef<Record<string, HTMLElement | null>>({});
   const registerBody = useCallback((id: string, el: HTMLElement | null) => {
     bodyRefs.current[id] = el;
@@ -1058,18 +1096,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
       if (active && (active.isContentEditable || active.tagName === "INPUT")) return;
 
       if (e.key === "Delete" || e.key === "Backspace") {
-        setSelection((sel) => {
-          if (!sel) return sel;
-          const containers: Record<ObjKind, NoteKind> = {
-            note: board.notes,
-            shape: board.shapes,
-            text: board.texts,
-            frame: board.frames,
-            arrow: board.arrows,
-          };
-          deleteObj(board.doc, containers[sel.kind], sel.id);
-          return null;
-        });
+        deleteSelection(selection);
         return;
       }
       if (e.key === "Escape") {
@@ -1085,7 +1112,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [board]);
+  }, [board, selection, deleteSelection]);
 
   const viewportClass = [
     styles.viewport,
@@ -1122,6 +1149,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
               selected={selection?.kind === "arrow" && selection.id === id}
               onSelect={setSelection}
               shapesById={shapesById}
+              onDelete={deleteSelection}
             />
           ))}
           {attractTarget &&
@@ -1157,6 +1185,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
             allShapes={shapes}
             allTexts={texts}
             allArrows={arrows}
+            onDelete={deleteSelection}
           />
         ))}
 
@@ -1172,6 +1201,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
             onSelect={setSelection}
             registerBody={registerBody}
             onAnchorPointerDown={onAnchorPointerDown}
+            onDelete={deleteSelection}
           />
         ))}
 
@@ -1186,6 +1216,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
             selected={selection?.kind === "text" && selection.id === id}
             onSelect={setSelection}
             registerBody={registerBody}
+            onDelete={deleteSelection}
           />
         ))}
 
@@ -1200,6 +1231,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
             selected={selection?.kind === "note" && selection.id === id}
             onSelect={setSelection}
             registerBody={registerBody}
+            onDelete={deleteSelection}
           />
         ))}
 
@@ -1385,7 +1417,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
 // zoom today too. This follows the same, already-established convention
 // rather than introducing a second, genuinely screen-space positioning
 // mechanism in this pass).
-function ConnectorToolbar({
+export function ConnectorToolbar({
   x,
   y,
   routing,
@@ -1393,6 +1425,7 @@ function ConnectorToolbar({
   headStart,
   headEnd,
   onChange,
+  onDelete,
 }: {
   x: number;
   y: number;
@@ -1401,8 +1434,11 @@ function ConnectorToolbar({
   headStart: ArrowHead;
   headEnd: ArrowHead;
   onChange: (patch: Partial<ArrowData>) => void;
+  onDelete?: () => void;
 }) {
-  const width = 372;
+  // F4: +46 over the original 372 to fit the delete button + its gap
+  // without clipping (foreignObject doesn't auto-size to content).
+  const width = 418;
   return (
     <foreignObject x={x - width / 2} y={y - 76} width={width} height={40} style={{ overflow: "visible" }}>
       <div
@@ -1463,6 +1499,22 @@ function ConnectorToolbar({
             ))}
           </select>
         </div>
+        {onDelete && (
+          <div className={styles.ctDeleteGroup}>
+            <button className={styles.deleteBtn} title="Delete connector" onClick={onDelete}>
+              <svg width={15} height={15} viewBox="0 0 24 24">
+                <path
+                  d="M5 6h14M9 6V4h6v2M7 6l1 14h8l1-14"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+          </div>
+        )}
       </div>
     </foreignObject>
   );
@@ -1477,6 +1529,7 @@ function ArrowItem({
   selected,
   onSelect,
   shapesById,
+  onDelete,
 }: {
   board: BoardDoc;
   id: string;
@@ -1486,6 +1539,7 @@ function ArrowItem({
   selected: boolean;
   onSelect: (s: Selection) => void;
   shapesById: Map<string, ShapeData>;
+  onDelete: (sel: Selection) => void;
 }) {
   type DragMode = "move" | "p1" | "p2" | "curve";
   const dragRef = useRef<{
@@ -1671,6 +1725,7 @@ function ArrowItem({
             headStart={headStart}
             headEnd={headEnd}
             onChange={(patch) => updateFields(board.doc, board.arrows, id, patch)}
+            onDelete={() => onDelete({ kind: "arrow", id })}
           />
         </>
       )}
@@ -1711,6 +1766,7 @@ function NoteItem({
   selected,
   onSelect,
   registerBody,
+  onDelete,
 }: {
   board: BoardDoc;
   id: string;
@@ -1720,6 +1776,7 @@ function NoteItem({
   selected: boolean;
   onSelect: (s: Selection) => void;
   registerBody: (id: string, el: HTMLElement | null) => void;
+  onDelete: (sel: Selection) => void;
 }) {
   const bodyRef = useRef<HTMLElement | null>(null);
   const drag = useSimpleDrag(board, board.notes, "note", id, data.x, data.y, view, tool, onSelect, bodyRef);
@@ -1769,6 +1826,7 @@ function NoteItem({
           underline={data.underline}
           textColor={data.textColor}
           onChange={(patch) => updateFields(board.doc, board.notes, id, patch)}
+          onDelete={() => onDelete({ kind: "note", id })}
         />
       )}
     </>
@@ -1787,6 +1845,7 @@ function ShapeItem({
   onSelect,
   registerBody,
   onAnchorPointerDown,
+  onDelete,
 }: {
   board: BoardDoc;
   id: string;
@@ -1797,6 +1856,7 @@ function ShapeItem({
   onSelect: (s: Selection) => void;
   registerBody: (id: string, el: HTMLElement | null) => void;
   onAnchorPointerDown: (shapeId: string, side: Side, x: number, y: number, clientX: number, clientY: number) => void;
+  onDelete: (sel: Selection) => void;
 }) {
   const bodyRef = useRef<HTMLElement | null>(null);
   const drag = useSimpleDrag(board, board.shapes, "shape", id, data.x, data.y, view, tool, onSelect, bodyRef);
@@ -1938,6 +1998,7 @@ function ShapeItem({
             underline={data.underline}
             textColor={data.textColor}
             onChange={(patch) => updateFields(board.doc, board.shapes, id, patch)}
+            onDelete={() => onDelete({ kind: "shape", id })}
           />
         </>
       )}
@@ -1954,6 +2015,7 @@ function TextItem({
   selected,
   onSelect,
   registerBody,
+  onDelete,
 }: {
   board: BoardDoc;
   id: string;
@@ -1963,6 +2025,7 @@ function TextItem({
   selected: boolean;
   onSelect: (s: Selection) => void;
   registerBody: (id: string, el: HTMLElement | null) => void;
+  onDelete: (sel: Selection) => void;
 }) {
   const bodyRef = useRef<HTMLElement | null>(null);
   const drag = useSimpleDrag(board, board.texts, "text", id, data.x, data.y, view, tool, onSelect, bodyRef);
@@ -2003,6 +2066,7 @@ function TextItem({
           underline={data.underline}
           textColor={data.textColor}
           onChange={(patch) => updateFields(board.doc, board.texts, id, patch)}
+          onDelete={() => onDelete({ kind: "text", id })}
         />
       )}
     </>
@@ -2028,6 +2092,7 @@ function FrameItem({
   allShapes,
   allTexts,
   allArrows,
+  onDelete,
 }: {
   board: BoardDoc;
   id: string;
@@ -2040,6 +2105,7 @@ function FrameItem({
   allShapes: { id: string; data: ShapeData }[];
   allTexts: { id: string; data: TextData }[];
   allArrows: { id: string; data: ArrowData }[];
+  onDelete: (sel: Selection) => void;
 }) {
   const startRef = useRef<{
     mx: number;
@@ -2164,7 +2230,7 @@ function FrameItem({
         <button
           className={styles.del}
           onPointerDown={(e) => e.stopPropagation()}
-          onClick={() => deleteObj(board.doc, board.frames, id)}
+          onClick={() => onDelete({ kind: "frame", id })}
         >
           ×
         </button>
