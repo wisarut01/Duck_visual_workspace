@@ -35,6 +35,7 @@ import {
 } from "@/lib/board-doc";
 import { useYCollection } from "@/hooks/useYCollection";
 import { elbowPoints, roundedPath, elbowMidpoint } from "@/lib/connector-path";
+import { toolbarStyle, centeredToolbarStyle, counterScale, screenPxToWorld, zoomInv } from "@/lib/screen-space";
 import ThemeToggle from "./ThemeToggle";
 import type { WebsocketProvider } from "y-websocket";
 
@@ -136,6 +137,48 @@ const ARROW_STROKE_PRESETS = [1.5, 2.5, 4, 6.5];
 const ARROW_STROKE_DEFAULT = 2.5;
 const ARROW_HEAD_STYLES: ArrowHead[] = ["none", "arrow", "triangle", "circle", "diamond"];
 const ROUTING_MODES: Routing[] = ["straight", "curved", "elbow"];
+// F2: constant on-screen gap (px) between an element and its screen-space
+// toolbar's bottom edge. Converted to world units per-render via
+// screenPxToWorld() so it stays this size on screen at any zoom.
+//
+// Both FontToolbar and ConnectorToolbar position the toolbar with CSS
+// `bottom: 0` against a wrapper whose own bottom edge is placed at exactly
+// `anchorY - screenPxToWorld(gapPx, zoom)`. That indirection matters: a
+// naive `top: anchorY - screenPxToWorld(gapPx, zoom)` directly on the
+// counter-scaled, bottom-origin toolbar div would need to *also* know the
+// toolbar's own unscaled layout height to land its actual (scaled) bottom
+// edge at the right spot — `top + height` is what the `transform-origin:
+// 50% 100%` point resolves to, and that `height` term ends up multiplied
+// by `zoom` on the way to the screen, undoing the constant-gap conversion
+// everywhere except zoom 1. Pinning via a zero-size wrapper + `bottom: 0`
+// sidesteps needing that height at all: `bottom: 0` places the origin
+// point at the wrapper's exact (already zoom-corrected) bottom edge,
+// independent of the toolbar's own rendered size.
+const FONT_TOOLBAR_GAP_PX = 8;
+// ConnectorToolbar's box: constant on-screen footprint (px) the
+// <foreignObject> is sized to at any zoom (safety margin against
+// foreignObject `overflow: visible` clipping inconsistencies — see
+// ConnectorToolbar below), and the constant on-screen gap between the
+// box's bottom edge and the connector's midpoint. Re-measured after F2's
+// ~1.35x control bump — was a hardcoded `width = 372` (unmeasured, per
+// PLAN.md's own note).
+const CONNECTOR_TOOLBAR_WIDTH_PX = 480;
+const CONNECTOR_TOOLBAR_HEIGHT_PX = 48;
+const CONNECTOR_TOOLBAR_GAP_PX = 20;
+// F5: same constant-screen-gap idea, for the frame label tab and delete
+// button — both pinned to a frame corner via a zero-size wrapper +
+// `bottom: 0` (see FrameItem), same reasoning as FONT_TOOLBAR_GAP_PX above
+// for why that's needed instead of a naive `top` offset.
+const FRAME_LABEL_GAP_PX = 6;
+const FRAME_DEL_GAP_PX = 6;
+// A small extension of React.CSSProperties for the one CSS custom property
+// this file sets from JS: `--zoom-inv` (1/view.s), read by
+// Canvas.module.css's `.anchor`/`.resizeHandle`/`.a-*` rules to counter-
+// scale (F2). CSSProperties itself has no index signature for custom
+// properties in the csstype version this repo pins, hence the extension.
+interface ZoomVarStyle extends React.CSSProperties {
+  "--zoom-inv"?: string | number;
+}
 // Epic C quick-create: gap (world units) between a shape and the sibling
 // created off one of its hover anchors, and how many times to step further
 // out along the same axis if the spot is already occupied.
@@ -149,9 +192,17 @@ const ANCHOR_CLICK_PX = 4;
 // +/- and a sans/mono family toggle (the only two families DESIGN.md defines
 // — no serif, to keep the "engineering instrument" look, not "generic AI tool"),
 // plus a left/center/right text-align group (Epic D).
+//
+// F2: `zoom` (view.s) drives a counter-scale (src/lib/screen-space.ts) so
+// this renders at a constant on-screen size regardless of zoom — it's a
+// child of the zoom-`transform`ed `.world` div like every other object, so
+// without this it shrinks/grows with the canvas the same as a note or shape
+// would. `x`/`y` stay world coordinates (unchanged); only the toolbar's own
+// `transform` and its vertical offset from `y` are zoom-compensated.
 function FontToolbar({
   x,
   y,
+  zoom,
   fontSize,
   fontFamily,
   textAlign,
@@ -159,6 +210,7 @@ function FontToolbar({
 }: {
   x: number;
   y: number;
+  zoom: number;
   fontSize: number;
   fontFamily: import("@/lib/board-doc").FontFamily;
   textAlign: TextAlign;
@@ -168,39 +220,51 @@ function FontToolbar({
     textAlign?: TextAlign;
   }) => void;
 }) {
+  // Zero-size positioning anchor at (x, y - gap) — see FONT_TOOLBAR_GAP_PX's
+  // comment for why the toolbar pins to *this* wrapper's bottom edge via
+  // CSS `bottom: 0` (in .fontToolbar) rather than computing its own `top`.
+  const anchorStyle: React.CSSProperties = {
+    position: "absolute",
+    left: x,
+    top: y - screenPxToWorld(FONT_TOOLBAR_GAP_PX, zoom),
+    width: 0,
+    height: 0,
+  };
   return (
-    <div className={styles.fontToolbar} style={{ left: x, top: y - 32 }} onPointerDown={(e) => e.stopPropagation()}>
-      <button onClick={() => onChange({ fontSize: Math.max(FONT_SIZE_MIN, fontSize - FONT_SIZE_STEP) })}>A−</button>
-      <span>{fontSize}</span>
-      <button onClick={() => onChange({ fontSize: Math.min(FONT_SIZE_MAX, fontSize + FONT_SIZE_STEP) })}>A+</button>
-      <div className={styles.ftSep} />
-      <button className={fontFamily === "ui" ? styles.ftActive : ""} onClick={() => onChange({ fontFamily: "ui" })}>
-        Sans
-      </button>
-      <button className={fontFamily === "mono" ? styles.ftActive : ""} onClick={() => onChange({ fontFamily: "mono" })}>
-        Mono
-      </button>
-      <div className={styles.ftSep} />
-      {(["left", "center", "right"] as TextAlign[]).map((a) => (
-        <button
-          key={a}
-          className={textAlign === a ? styles.ftActive : ""}
-          title={`Align ${a}`}
-          onClick={() => onChange({ textAlign: a })}
-        >
-          <svg width={13} height={13} viewBox="0 0 24 24">
-            {a === "left" && (
-              <path d="M4 6h16M4 12h10M4 18h14" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" />
-            )}
-            {a === "center" && (
-              <path d="M4 6h16M8 12h8M5 18h14" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" />
-            )}
-            {a === "right" && (
-              <path d="M4 6h16M10 12h10M6 18h14" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" />
-            )}
-          </svg>
+    <div style={anchorStyle}>
+      <div className={styles.fontToolbar} style={toolbarStyle(zoom)} onPointerDown={(e) => e.stopPropagation()}>
+        <button onClick={() => onChange({ fontSize: Math.max(FONT_SIZE_MIN, fontSize - FONT_SIZE_STEP) })}>A−</button>
+        <span>{fontSize}</span>
+        <button onClick={() => onChange({ fontSize: Math.min(FONT_SIZE_MAX, fontSize + FONT_SIZE_STEP) })}>A+</button>
+        <div className={styles.ftSep} />
+        <button className={fontFamily === "ui" ? styles.ftActive : ""} onClick={() => onChange({ fontFamily: "ui" })}>
+          Sans
         </button>
-      ))}
+        <button className={fontFamily === "mono" ? styles.ftActive : ""} onClick={() => onChange({ fontFamily: "mono" })}>
+          Mono
+        </button>
+        <div className={styles.ftSep} />
+        {(["left", "center", "right"] as TextAlign[]).map((a) => (
+          <button
+            key={a}
+            className={textAlign === a ? styles.ftActive : ""}
+            title={`Align ${a}`}
+            onClick={() => onChange({ textAlign: a })}
+          >
+            <svg width={13} height={13} viewBox="0 0 24 24">
+              {a === "left" && (
+                <path d="M4 6h16M4 12h10M4 18h14" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" />
+              )}
+              {a === "center" && (
+                <path d="M4 6h16M8 12h8M5 18h14" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" />
+              )}
+              {a === "right" && (
+                <path d="M4 6h16M10 12h10M6 18h14" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" />
+              )}
+            </svg>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -401,8 +465,20 @@ function ResizeHandles({
   }
 
   const corners: Corner[] = ["nw", "ne", "sw", "se"];
+  // F2: `--zoom-inv` drives .resizeHandle's counter-scale in
+  // Canvas.module.css so handles stay a constant, touch-sized 10px on
+  // screen instead of shrinking with zoom.
+  const wrapperStyle: ZoomVarStyle = {
+    position: "absolute",
+    left: x,
+    top: y,
+    width: w,
+    height: h,
+    pointerEvents: "none",
+    "--zoom-inv": zoomInv(view.s),
+  };
   return (
-    <div style={{ position: "absolute", left: x, top: y, width: w, height: h, pointerEvents: "none" }}>
+    <div style={wrapperStyle}>
       {corners.map((c) => (
         <div
           key={c}
@@ -1204,16 +1280,43 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
 // Floating control shown above a selected connector: routing mode (3-way),
 // thickness (4 presets, unchanged from before — just relocated here per
 // PLAN.md A4), and a start/end arrowhead style pair. Rendered via
-// <foreignObject> so it can hold plain HTML controls inside the SVG layer;
-// it lives in world coordinates same as FontToolbar (see that component's
-// note — despite the "screen space" framing in PLAN.md, FontToolbar was
-// already a descendant of the zoom-scaled `.world` div, so it scales with
-// zoom today too. This follows the same, already-established convention
-// rather than introducing a second, genuinely screen-space positioning
-// mechanism in this pass).
+// <foreignObject> so it can hold plain HTML controls inside the SVG layer.
+//
+// F2: this used to just live in world coordinates like every other object
+// under `.world` (a prior comment here claimed that was already
+// "screen-space" — it wasn't; PLAN.md's F2 section calls this out as one of
+// two things the old plan got wrong). Now the inner <div> carries a
+// counter-scale (same `src/lib/screen-space.ts` primitive as FontToolbar)
+// so it's a constant on-screen size at any zoom.
+//
+// Two things specific to foreignObject, both reflected in the structure
+// below:
+// 1. The counter-scaled div's *painted* pixels grow well beyond its own
+//    (unscaled) layout box at low zoom, and a foreignObject clips its
+//    content to its `width`/`height` box by default. `overflow: visible`
+//    on the foreignObject opts out of that, but foreignObject overflow
+//    handling has historically been inconsistent across engines, so as a
+//    second, belt-and-suspenders line of defense the box itself is also
+//    grown to `CONNECTOR_TOOLBAR_WIDTH/HEIGHT_PX` converted to world units
+//    (sized so it always maps back to that constant on-screen footprint
+//    after `.world`'s own scale is applied) — big enough to contain the
+//    scaled content either way.
+// 2. An earlier version of this tried `display: flex` on the
+//    <foreignObject> itself to bottom-center the toolbar div inside that
+//    grown box. Don't do that — flexbox layout on a foreignObject isn't
+//    reliably honored across engines (it's an SVG viewport-establishing
+//    element, not dependably a CSS flex container), and when it's not
+//    honored the div sits top-left of the (now much bigger) box instead of
+//    bottom-center, at every zoom including 1. Plain block/absolute
+//    positioning doesn't have that problem: a `position: relative` wrapper
+//    filling the box, with the toolbar `position: absolute; left: 50%;
+//    bottom: 0` inside it (`.connectorToolbar` in Canvas.module.css) plus
+//    `centeredToolbarStyle()`'s `translateX(-50%) scale(1/zoom)`, is
+//    ordinary CSS that every engine agrees on.
 function ConnectorToolbar({
   x,
   y,
+  zoom,
   routing,
   strokeWidth,
   headStart,
@@ -1222,72 +1325,78 @@ function ConnectorToolbar({
 }: {
   x: number;
   y: number;
+  zoom: number;
   routing: Routing;
   strokeWidth: number;
   headStart: ArrowHead;
   headEnd: ArrowHead;
   onChange: (patch: Partial<ArrowData>) => void;
 }) {
-  const width = 372;
+  const boxWidth = screenPxToWorld(CONNECTOR_TOOLBAR_WIDTH_PX, zoom);
+  const boxHeight = screenPxToWorld(CONNECTOR_TOOLBAR_HEIGHT_PX, zoom);
+  const gap = screenPxToWorld(CONNECTOR_TOOLBAR_GAP_PX, zoom);
   return (
-    <foreignObject x={x - width / 2} y={y - 76} width={width} height={40} style={{ overflow: "visible" }}>
-      <div
-        className={styles.connectorToolbar}
-        onPointerDown={(e) => e.stopPropagation()}
-        onPointerMove={(e) => e.stopPropagation()}
-        onPointerUp={(e) => e.stopPropagation()}
-      >
-        <div className={styles.ctGroup}>
-          {ROUTING_MODES.map((r) => (
-            <button key={r} className={routing === r ? styles.ftActive : ""} title={r} onClick={() => onChange({ routing: r })}>
-              {r === "straight" && (
-                <svg width={16} height={16} viewBox="0 0 24 24">
-                  <path d="M4 20L20 4" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" fill="none" />
-                </svg>
-              )}
-              {r === "curved" && (
-                <svg width={16} height={16} viewBox="0 0 24 24">
-                  <path d="M4 20Q4 4 20 4" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" fill="none" />
-                </svg>
-              )}
-              {r === "elbow" && (
-                <svg width={16} height={16} viewBox="0 0 24 24">
-                  <path d="M4 20H14V4H20" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" fill="none" />
-                </svg>
-              )}
-            </button>
-          ))}
-        </div>
-        <div className={styles.ftSep} />
-        <div className={styles.ctGroup}>
-          {ARROW_STROKE_PRESETS.map((w) => (
-            <button key={w} className={strokeWidth === w ? styles.ftActive : ""} title={`${w}px`} onClick={() => onChange({ strokeWidth: w })}>
-              <svg width={18} height={16} viewBox="0 0 20 16">
-                <line x1={2} y1={8} x2={18} y2={8} stroke="currentColor" strokeWidth={w} strokeLinecap="round" />
-              </svg>
-            </button>
-          ))}
-        </div>
-        <div className={styles.ftSep} />
-        <div className={styles.ctGroup}>
-          <span className={styles.ctLabel}>Start</span>
-          <select value={headStart} onChange={(e) => onChange({ headStart: e.target.value as ArrowHead })}>
-            {ARROW_HEAD_STYLES.map((h) => (
-              <option key={h} value={h}>
-                {h}
-              </option>
+    <foreignObject x={x - boxWidth / 2} y={y - gap - boxHeight} width={boxWidth} height={boxHeight} style={{ overflow: "visible" }}>
+      <div style={{ position: "relative", width: "100%", height: "100%" }}>
+        <div
+          className={styles.connectorToolbar}
+          style={centeredToolbarStyle(zoom)}
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerMove={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
+        >
+          <div className={styles.ctGroup}>
+            {ROUTING_MODES.map((r) => (
+              <button key={r} className={routing === r ? styles.ftActive : ""} title={r} onClick={() => onChange({ routing: r })}>
+                {r === "straight" && (
+                  <svg width={16} height={16} viewBox="0 0 24 24">
+                    <path d="M4 20L20 4" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" fill="none" />
+                  </svg>
+                )}
+                {r === "curved" && (
+                  <svg width={16} height={16} viewBox="0 0 24 24">
+                    <path d="M4 20Q4 4 20 4" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" fill="none" />
+                  </svg>
+                )}
+                {r === "elbow" && (
+                  <svg width={16} height={16} viewBox="0 0 24 24">
+                    <path d="M4 20H14V4H20" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" fill="none" />
+                  </svg>
+                )}
+              </button>
             ))}
-          </select>
-        </div>
-        <div className={styles.ctGroup}>
-          <span className={styles.ctLabel}>End</span>
-          <select value={headEnd} onChange={(e) => onChange({ headEnd: e.target.value as ArrowHead })}>
-            {ARROW_HEAD_STYLES.map((h) => (
-              <option key={h} value={h}>
-                {h}
-              </option>
+          </div>
+          <div className={styles.ftSep} />
+          <div className={styles.ctGroup}>
+            {ARROW_STROKE_PRESETS.map((w) => (
+              <button key={w} className={strokeWidth === w ? styles.ftActive : ""} title={`${w}px`} onClick={() => onChange({ strokeWidth: w })}>
+                <svg width={18} height={16} viewBox="0 0 20 16">
+                  <line x1={2} y1={8} x2={18} y2={8} stroke="currentColor" strokeWidth={w} strokeLinecap="round" />
+                </svg>
+              </button>
             ))}
-          </select>
+          </div>
+          <div className={styles.ftSep} />
+          <div className={styles.ctGroup}>
+            <span className={styles.ctLabel}>Start</span>
+            <select value={headStart} onChange={(e) => onChange({ headStart: e.target.value as ArrowHead })}>
+              {ARROW_HEAD_STYLES.map((h) => (
+                <option key={h} value={h}>
+                  {h}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className={styles.ctGroup}>
+            <span className={styles.ctLabel}>End</span>
+            <select value={headEnd} onChange={(e) => onChange({ headEnd: e.target.value as ArrowHead })}>
+              {ARROW_HEAD_STYLES.map((h) => (
+                <option key={h} value={h}>
+                  {h}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
     </foreignObject>
@@ -1492,6 +1601,7 @@ function ArrowItem({
           <ConnectorToolbar
             x={midX}
             y={midY}
+            zoom={view.s}
             routing={routing}
             strokeWidth={strokeWidth}
             headStart={headStart}
@@ -1579,6 +1689,7 @@ function NoteItem({
         <FontToolbar
           x={data.x}
           y={data.y}
+          zoom={view.s}
           fontSize={fontSize}
           fontFamily={data.fontFamily ?? "ui"}
           textAlign={data.textAlign ?? "left"}
@@ -1667,7 +1778,20 @@ function ShapeItem({
       )}
       <div
         className={`${styles.shape} ${styles[data.kind]} ${selected ? styles.selected : ""}`}
-        style={{ left: data.x, top: data.y, width: data.w, height: data.h, borderColor: c.bg, background: `${c.bg}2e` }}
+        // F2: `--zoom-inv` feeds the .anchor/.a-* hover-dot counter-scale in
+        // Canvas.module.css, so they stay a constant, touch-sized 14px on
+        // screen instead of shrinking with zoom.
+        style={
+          {
+            left: data.x,
+            top: data.y,
+            width: data.w,
+            height: data.h,
+            borderColor: c.bg,
+            background: `${c.bg}2e`,
+            "--zoom-inv": zoomInv(view.s),
+          } as ZoomVarStyle
+        }
         {...drag}
       >
         <div
@@ -1717,6 +1841,7 @@ function ShapeItem({
           <FontToolbar
             x={data.x}
             y={data.y}
+            zoom={view.s}
             fontSize={fontSize}
             fontFamily={data.fontFamily ?? "ui"}
             textAlign={data.textAlign ?? "center"}
@@ -1771,6 +1896,7 @@ function TextItem({
         <FontToolbar
           x={data.x}
           y={data.y}
+          zoom={view.s}
           fontSize={fontSize}
           fontFamily={data.fontFamily ?? "ui"}
           textAlign={data.textAlign ?? "left"}
@@ -1788,7 +1914,26 @@ interface FrameMember {
   y: number;
 }
 
-function FrameItem({
+// F5: the frame's "×" is today the only on-canvas delete affordance
+// (everything else requires the Backspace key, which doesn't exist on a
+// phone). PLAN.md's F4 generalizes this to every selected object; this is
+// intentionally left small (a style + a click handler) so that lift is just
+// "call it from more places," not a rewrite — F4 owns the generalization,
+// not this pass.
+function DeleteButton({ zoom, onDelete }: { zoom: number; onDelete: () => void }) {
+  return (
+    <button
+      className={styles.del}
+      style={counterScale(zoom, "bottom-right")}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={onDelete}
+    >
+      ×
+    </button>
+  );
+}
+
+export function FrameItem({
   board,
   id,
   data,
@@ -1912,34 +2057,57 @@ function FrameItem({
     if (s && !s.moved) onSelect({ kind: "frame", id });
   }
 
+  // F5: label/delete both counter-scale (constant on-screen size at any
+  // zoom) and are pinned via a zero-size anchor wrapper + CSS `bottom: 0`
+  // (label) / `bottom: 0; right: 0` (delete), same trick FontToolbar and
+  // ConnectorToolbar use and for the same reason — it lands the
+  // transform-origin point exactly, with no dependency on the label's own
+  // (variable-length!) rendered width or height. The label's origin is
+  // bottom-LEFT so the frame's actual top-left corner — the wrapper's own
+  // position, computed below — stays pinned as the label grows/shrinks;
+  // the delete button mirrors that at bottom-RIGHT, off the frame's
+  // top-right corner, so the two don't grow into each other.
+  const labelAnchorStyle: React.CSSProperties = {
+    position: "absolute",
+    left: 0,
+    top: -screenPxToWorld(FRAME_LABEL_GAP_PX, view.s),
+    width: 0,
+    height: 0,
+  };
+  const delAnchorStyle: React.CSSProperties = {
+    position: "absolute",
+    right: 0,
+    top: -screenPxToWorld(FRAME_DEL_GAP_PX, view.s),
+    width: 0,
+    height: 0,
+  };
   return (
     <>
       <div
         className={`${styles.frame} ${selected ? styles.selected : ""}`}
         style={{ left: data.x, top: data.y, width: data.w, height: data.h }}
       >
-        <div
-          ref={(el) => {
-            registerBody(id, el);
-            bodyRef.current = el;
-          }}
-          className={styles.flabel}
-          contentEditable
-          suppressContentEditableWarning
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onBlur={(e) => updateFields(board.doc, board.frames, id, { label: e.currentTarget.textContent ?? "" })}
-        >
-          {data.label}
+        <div style={labelAnchorStyle}>
+          <div
+            ref={(el) => {
+              registerBody(id, el);
+              bodyRef.current = el;
+            }}
+            className={styles.flabel}
+            style={counterScale(view.s, "bottom-left")}
+            contentEditable
+            suppressContentEditableWarning
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            onBlur={(e) => updateFields(board.doc, board.frames, id, { label: e.currentTarget.textContent ?? "" })}
+          >
+            {data.label}
+          </div>
         </div>
-        <button
-          className={styles.del}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={() => deleteObj(board.doc, board.frames, id)}
-        >
-          ×
-        </button>
+        <div style={delAnchorStyle}>
+          <DeleteButton zoom={view.s} onDelete={() => deleteObj(board.doc, board.frames, id)} />
+        </div>
       </div>
       {selected && (
         <ResizeHandles

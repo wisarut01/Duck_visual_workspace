@@ -49,39 +49,55 @@
   border-color: var(--accent);
   background: var(--accent-soft);
 }
+/* F5: positioned against the zero-size anchor div FrameItem wraps it in
+   (`left: 0; bottom: 0` — the wrapper is placed at the frame's top-left
+   corner, offset up by a constant screen gap) rather than a fixed `top`
+   offset, so the counter-scale's `transform-origin: 0% 100%` point lands
+   exactly there regardless of the label's own (variable-length!) rendered
+   size. Base size bumped (11px -> 14px font, more padding) — was cramped
+   even at zoom 1, same as F2's toolbars. */
 .flabel {
   position: absolute;
-  top: -24px;
   left: 0;
-  font: 600 11px/1 var(--font-mono);
+  bottom: 0;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  font: 600 14px/1 var(--font-mono);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--ink-soft);
   background: var(--panel);
   border: 1px solid var(--panel-border);
   border-radius: 6px;
-  padding: 5px 8px;
+  padding: 7px 12px;
   cursor: grab;
   outline: none;
   white-space: nowrap;
   pointer-events: auto;
+  box-shadow: var(--panel-shadow);
 }
+/* F5: same wrapper trick, mirrored at the frame's top-right corner
+   (`right: 0; bottom: 0`) with a bottom-right counter-scale origin so it
+   doesn't grow into the label as zoom shrinks. Bumped 20x20 opacity 0.55
+   -> 30x30 opacity 0.8, matching the label's touch-target-sized bump. */
 .del {
   position: absolute;
-  top: -26px;
   right: 0;
-  width: 20px;
-  height: 20px;
+  bottom: 0;
+  width: 30px;
+  height: 30px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 6px;
   background: var(--panel);
   border: 1px solid var(--panel-border);
   color: var(--ink-faint);
-  font-size: 13px;
+  font-size: 17px;
   line-height: 1;
   cursor: pointer;
-  opacity: 0.55;
+  opacity: 0.8;
   pointer-events: auto;
+  box-shadow: var(--panel-shadow);
 }
 .del:hover { opacity: 1; color: var(--danger); }
 
@@ -111,6 +127,11 @@
 }
 
 /* ---- resize handles (shape + frame) ---- */
+/* F2: counter-scaled via `--zoom-inv` (set inline by ResizeHandles/ShapeItem
+   from src/lib/screen-space.ts) so the handle stays a constant on-screen
+   size at any zoom. `scale()`'s default transform-origin is the element's
+   own center, which is exactly where top/left already place it — so this
+   composes for free, no translate to preserve here. */
 .resizeHandle {
   position: absolute;
   width: 10px;
@@ -120,6 +141,7 @@
   border-radius: 50%;
   pointer-events: auto;
   z-index: 5;
+  transform: scale(var(--zoom-inv, 1));
 }
 .rh-nw { top: -6px; left: -6px; cursor: nwse-resize; }
 .rh-ne { top: -6px; right: -6px; cursor: nesw-resize; }
@@ -127,6 +149,14 @@
 .rh-se { bottom: -6px; right: -6px; cursor: nwse-resize; }
 
 /* ---- hover-anchor connector dots (shape edges, Miro-style) ---- */
+/* F2: counter-scaled the same way. Unlike .resizeHandle these already carry
+   a centering translate — `--zoom-inv` is *appended* after it, not in place
+   of it, so both keep working together: CSS applies scale() around the
+   element's own center in the box's original (untransformed) layout size,
+   so the translateX/Y(-50%) offset — which is a percentage of that same
+   untransformed size — still lands the anchor's center exactly on the
+   shape's edge midpoint at any zoom, with the box then growing/shrinking
+   in place around that fixed center. */
 .anchor {
   position: absolute;
   width: 14px;
@@ -143,10 +173,10 @@
   cursor: crosshair;
 }
 .shape:hover .anchor { opacity: 1; pointer-events: auto; }
-.a-n { top: -7px; left: 50%; transform: translateX(-50%); }
-.a-s { bottom: -7px; left: 50%; transform: translateX(-50%); }
-.a-e { right: -7px; top: 50%; transform: translateY(-50%); }
-.a-w { left: -7px; top: 50%; transform: translateY(-50%); }
+.a-n { top: -7px; left: 50%; transform: translateX(-50%) scale(var(--zoom-inv, 1)); }
+.a-s { bottom: -7px; left: 50%; transform: translateX(-50%) scale(var(--zoom-inv, 1)); }
+.a-e { right: -7px; top: 50%; transform: translateY(-50%) scale(var(--zoom-inv, 1)); }
+.a-w { left: -7px; top: 50%; transform: translateY(-50%) scale(var(--zoom-inv, 1)); }
 /* Reads as "create" rather than "drag a line" until the pointer actually
    moves (Epic C: click vs drag). */
 .anchorPlus {
@@ -169,40 +199,54 @@
    default) land near the rotated square's edges, not its visual tips. The
    NW/NE/SE/SW corners of the *unrotated* box are what rotate onto the true
    N/E/S/W tips, so diamonds reposition anchors there instead. */
-.shape.diamond .a-n { top: -7px; left: -7px; transform: none; }
-.shape.diamond .a-e { top: -7px; right: -7px; transform: none; }
-.shape.diamond .a-s { bottom: -7px; right: -7px; transform: none; }
-.shape.diamond .a-w { bottom: -7px; left: -7px; transform: none; }
+/* No centering translate needed here (top/left are already the exact
+   corner offset), but F2's counter-scale still applies. */
+.shape.diamond .a-n { top: -7px; left: -7px; transform: scale(var(--zoom-inv, 1)); }
+.shape.diamond .a-e { top: -7px; right: -7px; transform: scale(var(--zoom-inv, 1)); }
+.shape.diamond .a-s { bottom: -7px; right: -7px; transform: scale(var(--zoom-inv, 1)); }
+.shape.diamond .a-w { bottom: -7px; left: -7px; transform: scale(var(--zoom-inv, 1)); }
 
 /* ---- font toolbar (note/shape/text, shown while selected) ---- */
+/* F2: base sizes bumped ~1.35x (was cramped even at zoom 1) — buttons to
+   min 36x32px, font 12->13px. The element itself is counter-scaled (inline
+   `transform`/`transformOrigin` from src/lib/screen-space.ts, applied by
+   FontToolbar in Canvas.tsx) so this on-screen size holds at any zoom. */
+/* Positioned against the zero-size anchor div FontToolbar wraps it in (see
+   Canvas.tsx) — `bottom: 0` pins this element's own bottom edge (i.e. the
+   counter-scale's `transform-origin: 50% 100%` point) exactly to that
+   anchor, independent of this element's actual rendered height. */
 .fontToolbar {
   position: absolute;
+  left: 0;
+  bottom: 0;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 3px;
   background: var(--panel);
   border: 1px solid var(--panel-border);
-  border-radius: 6px;
-  padding: 3px 6px;
-  font: 600 11px/1 var(--font-mono);
+  border-radius: 7px;
+  padding: 4px 8px;
+  font: 600 13px/1 var(--font-mono);
   color: var(--ink-soft);
   z-index: 5;
   white-space: nowrap;
+  box-shadow: var(--panel-shadow);
 }
 .fontToolbar button {
-  height: 18px;
-  padding: 0 5px;
+  min-width: 36px;
+  height: 32px;
+  padding: 0 7px;
   border: 0;
-  border-radius: 4px;
+  border-radius: 5px;
   background: transparent;
   color: var(--ink-soft);
   cursor: pointer;
-  font: 600 11px/1 var(--font-mono);
+  font: 600 13px/1 var(--font-mono);
 }
 .fontToolbar button:hover { background: var(--hair); color: var(--ink); }
 .fontToolbar button.ftActive { background: var(--accent-soft); color: var(--accent); }
-.fontToolbar span { min-width: 16px; text-align: center; font-variant-numeric: tabular-nums; }
-.ftSep { width: 1px; height: 14px; background: var(--panel-border); margin: 0 2px; }
+.fontToolbar span { min-width: 20px; text-align: center; font-variant-numeric: tabular-nums; }
+.ftSep { width: 1px; height: 18px; background: var(--panel-border); margin: 0 3px; }
 
 /* ---- arrow curvature + endpoint handles ---- */
 .curveHandle {
@@ -227,28 +271,40 @@
 }
 
 /* ---- unified connector toolbar (Epic A4) ---- */
+/* F2: same ~1.35x base-size bump as .fontToolbar, buttons to min 36x32px,
+   select to min-height 32px / font 13px. The wrapping <div> (not the
+   <foreignObject> itself — see ConnectorToolbar in Canvas.tsx) carries the
+   inline counter-scale transform, same primitive as FontToolbar. */
+/* Positioned against the `position: relative` wrapper that fills the
+   <foreignObject> box (see Canvas.tsx) — `left: 50%; bottom: 0` plus the
+   inline `centeredToolbarStyle()` transform (`translateX(-50%)
+   scale(1/zoom)`) bottom-center-anchors this div at any zoom. Plain CSS
+   positioning, not flexbox on the foreignObject — that isn't reliably
+   honored across engines (see the comment above ConnectorToolbar). */
 .connectorToolbar {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   width: fit-content;
-  margin: 0 auto;
   background: var(--panel);
   border: 1px solid var(--panel-border);
   box-shadow: var(--panel-shadow);
-  border-radius: 8px;
-  padding: 4px 6px;
-  font: 600 11px/1 var(--font-mono);
+  border-radius: 9px;
+  padding: 5px 8px;
+  font: 600 13px/1 var(--font-mono);
   color: var(--ink-soft);
   white-space: nowrap;
   pointer-events: auto;
 }
 .connectorToolbar button {
-  height: 22px;
-  min-width: 22px;
-  padding: 0 4px;
+  height: 32px;
+  min-width: 36px;
+  padding: 0 6px;
   border: 0;
-  border-radius: 4px;
+  border-radius: 5px;
   background: transparent;
   color: var(--ink-soft);
   cursor: pointer;
@@ -257,12 +313,12 @@
 }
 .connectorToolbar button:hover { background: var(--hair); color: var(--ink); }
 .connectorToolbar select {
-  height: 20px;
+  min-height: 32px;
   border: 1px solid var(--panel-border);
-  border-radius: 4px;
+  border-radius: 5px;
   background: var(--panel);
   color: var(--ink);
-  font: 600 10px/1 var(--font-mono);
+  font: 600 13px/1 var(--font-mono);
   text-transform: capitalize;
 }
 .ctGroup { display: flex; align-items: center; gap: 2px; }
