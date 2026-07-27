@@ -35,6 +35,7 @@ import {
 } from "@/lib/board-doc";
 import { useYCollection } from "@/hooks/useYCollection";
 import { elbowPoints, roundedPath, elbowMidpoint } from "@/lib/connector-path";
+import { toolbarStyle, screenPxToWorld, zoomInv } from "@/lib/screen-space";
 import ThemeToggle from "./ThemeToggle";
 import type { WebsocketProvider } from "y-websocket";
 
@@ -136,6 +137,26 @@ const ARROW_STROKE_PRESETS = [1.5, 2.5, 4, 6.5];
 const ARROW_STROKE_DEFAULT = 2.5;
 const ARROW_HEAD_STYLES: ArrowHead[] = ["none", "arrow", "triangle", "circle", "diamond"];
 const ROUTING_MODES: Routing[] = ["straight", "curved", "elbow"];
+// F2: constant on-screen gap (px) between an element and its screen-space
+// toolbar, converted to world units per-render via screenPxToWorld() so the
+// visual gap stays this size at any zoom instead of shrinking with it.
+const FONT_TOOLBAR_GAP_PX = 40;
+// ConnectorToolbar's box: constant on-screen footprint (px) the
+// <foreignObject> is sized to at any zoom (see ConnectorToolbar below for
+// why), and the constant on-screen gap between the box's bottom edge and
+// the connector's midpoint. Re-measured after F2's ~1.35x control bump —
+// was a hardcoded `width = 372` (unmeasured, per PLAN.md's own note).
+const CONNECTOR_TOOLBAR_WIDTH_PX = 480;
+const CONNECTOR_TOOLBAR_HEIGHT_PX = 48;
+const CONNECTOR_TOOLBAR_GAP_PX = 40;
+// A small extension of React.CSSProperties for the one CSS custom property
+// this file sets from JS: `--zoom-inv` (1/view.s), read by
+// Canvas.module.css's `.anchor`/`.resizeHandle`/`.a-*` rules to counter-
+// scale (F2). CSSProperties itself has no index signature for custom
+// properties in the csstype version this repo pins, hence the extension.
+interface ZoomVarStyle extends React.CSSProperties {
+  "--zoom-inv"?: string | number;
+}
 // Epic C quick-create: gap (world units) between a shape and the sibling
 // created off one of its hover anchors, and how many times to step further
 // out along the same axis if the spot is already occupied.
@@ -149,9 +170,17 @@ const ANCHOR_CLICK_PX = 4;
 // +/- and a sans/mono family toggle (the only two families DESIGN.md defines
 // — no serif, to keep the "engineering instrument" look, not "generic AI tool"),
 // plus a left/center/right text-align group (Epic D).
+//
+// F2: `zoom` (view.s) drives a counter-scale (src/lib/screen-space.ts) so
+// this renders at a constant on-screen size regardless of zoom — it's a
+// child of the zoom-`transform`ed `.world` div like every other object, so
+// without this it shrinks/grows with the canvas the same as a note or shape
+// would. `x`/`y` stay world coordinates (unchanged); only the toolbar's own
+// `transform` and its vertical offset from `y` are zoom-compensated.
 function FontToolbar({
   x,
   y,
+  zoom,
   fontSize,
   fontFamily,
   textAlign,
@@ -159,6 +188,7 @@ function FontToolbar({
 }: {
   x: number;
   y: number;
+  zoom: number;
   fontSize: number;
   fontFamily: import("@/lib/board-doc").FontFamily;
   textAlign: TextAlign;
@@ -168,8 +198,9 @@ function FontToolbar({
     textAlign?: TextAlign;
   }) => void;
 }) {
+  const style = { left: x, top: y - screenPxToWorld(FONT_TOOLBAR_GAP_PX, zoom), ...toolbarStyle(zoom) };
   return (
-    <div className={styles.fontToolbar} style={{ left: x, top: y - 32 }} onPointerDown={(e) => e.stopPropagation()}>
+    <div className={styles.fontToolbar} style={style} onPointerDown={(e) => e.stopPropagation()}>
       <button onClick={() => onChange({ fontSize: Math.max(FONT_SIZE_MIN, fontSize - FONT_SIZE_STEP) })}>A−</button>
       <span>{fontSize}</span>
       <button onClick={() => onChange({ fontSize: Math.min(FONT_SIZE_MAX, fontSize + FONT_SIZE_STEP) })}>A+</button>
@@ -401,8 +432,20 @@ function ResizeHandles({
   }
 
   const corners: Corner[] = ["nw", "ne", "sw", "se"];
+  // F2: `--zoom-inv` drives .resizeHandle's counter-scale in
+  // Canvas.module.css so handles stay a constant, touch-sized 10px on
+  // screen instead of shrinking with zoom.
+  const wrapperStyle: ZoomVarStyle = {
+    position: "absolute",
+    left: x,
+    top: y,
+    width: w,
+    height: h,
+    pointerEvents: "none",
+    "--zoom-inv": zoomInv(view.s),
+  };
   return (
-    <div style={{ position: "absolute", left: x, top: y, width: w, height: h, pointerEvents: "none" }}>
+    <div style={wrapperStyle}>
       {corners.map((c) => (
         <div
           key={c}
@@ -1204,16 +1247,33 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
 // Floating control shown above a selected connector: routing mode (3-way),
 // thickness (4 presets, unchanged from before — just relocated here per
 // PLAN.md A4), and a start/end arrowhead style pair. Rendered via
-// <foreignObject> so it can hold plain HTML controls inside the SVG layer;
-// it lives in world coordinates same as FontToolbar (see that component's
-// note — despite the "screen space" framing in PLAN.md, FontToolbar was
-// already a descendant of the zoom-scaled `.world` div, so it scales with
-// zoom today too. This follows the same, already-established convention
-// rather than introducing a second, genuinely screen-space positioning
-// mechanism in this pass).
+// <foreignObject> so it can hold plain HTML controls inside the SVG layer.
+//
+// F2: this used to just live in world coordinates like every other object
+// under `.world` (a prior comment here claimed that was already
+// "screen-space" — it wasn't; PLAN.md's F2 section calls this out as one of
+// two things the old plan got wrong). Now the inner <div> carries a
+// counter-scale (same `src/lib/screen-space.ts` primitive as FontToolbar)
+// so it's a constant on-screen size at any zoom. The trick specific to
+// foreignObject: the counter-scaled div's *painted* pixels grow well beyond
+// its own (unscaled) layout box at low zoom, and a foreignObject clips its
+// content to its `width`/`height` box by default — `overflow: visible` on
+// the foreignObject opts out of that, but foreignObject overflow handling
+// has historically been inconsistent across engines, so as a second, belt-
+// and-suspenders line of defense the box itself is also grown to
+// `CONNECTOR_TOOLBAR_WIDTH/HEIGHT_PX` converted to world units (i.e. sized
+// so it always maps back to that constant on-screen footprint after
+// `.world`'s own scale is applied) — big enough to contain the scaled
+// content either way. `display: flex; align-items: flex-end;
+// justify-content: center` on the foreignObject bottom-center-anchors the
+// (possibly much smaller, unscaled-box) div inside that bigger box, which
+// combined with the div's own `transform-origin: 50% 100%` keeps the
+// toolbar's bottom-center pinned at `(x, y - gap)` regardless of zoom,
+// instead of drifting as the box grows.
 function ConnectorToolbar({
   x,
   y,
+  zoom,
   routing,
   strokeWidth,
   headStart,
@@ -1222,17 +1282,27 @@ function ConnectorToolbar({
 }: {
   x: number;
   y: number;
+  zoom: number;
   routing: Routing;
   strokeWidth: number;
   headStart: ArrowHead;
   headEnd: ArrowHead;
   onChange: (patch: Partial<ArrowData>) => void;
 }) {
-  const width = 372;
+  const boxWidth = screenPxToWorld(CONNECTOR_TOOLBAR_WIDTH_PX, zoom);
+  const boxHeight = screenPxToWorld(CONNECTOR_TOOLBAR_HEIGHT_PX, zoom);
+  const gap = screenPxToWorld(CONNECTOR_TOOLBAR_GAP_PX, zoom);
   return (
-    <foreignObject x={x - width / 2} y={y - 76} width={width} height={40} style={{ overflow: "visible" }}>
+    <foreignObject
+      x={x - boxWidth / 2}
+      y={y - gap - boxHeight}
+      width={boxWidth}
+      height={boxHeight}
+      style={{ overflow: "visible", display: "flex", alignItems: "flex-end", justifyContent: "center" }}
+    >
       <div
         className={styles.connectorToolbar}
+        style={toolbarStyle(zoom)}
         onPointerDown={(e) => e.stopPropagation()}
         onPointerMove={(e) => e.stopPropagation()}
         onPointerUp={(e) => e.stopPropagation()}
@@ -1492,6 +1562,7 @@ function ArrowItem({
           <ConnectorToolbar
             x={midX}
             y={midY}
+            zoom={view.s}
             routing={routing}
             strokeWidth={strokeWidth}
             headStart={headStart}
@@ -1579,6 +1650,7 @@ function NoteItem({
         <FontToolbar
           x={data.x}
           y={data.y}
+          zoom={view.s}
           fontSize={fontSize}
           fontFamily={data.fontFamily ?? "ui"}
           textAlign={data.textAlign ?? "left"}
@@ -1667,7 +1739,20 @@ function ShapeItem({
       )}
       <div
         className={`${styles.shape} ${styles[data.kind]} ${selected ? styles.selected : ""}`}
-        style={{ left: data.x, top: data.y, width: data.w, height: data.h, borderColor: c.bg, background: `${c.bg}2e` }}
+        // F2: `--zoom-inv` feeds the .anchor/.a-* hover-dot counter-scale in
+        // Canvas.module.css, so they stay a constant, touch-sized 14px on
+        // screen instead of shrinking with zoom.
+        style={
+          {
+            left: data.x,
+            top: data.y,
+            width: data.w,
+            height: data.h,
+            borderColor: c.bg,
+            background: `${c.bg}2e`,
+            "--zoom-inv": zoomInv(view.s),
+          } as ZoomVarStyle
+        }
         {...drag}
       >
         <div
@@ -1717,6 +1802,7 @@ function ShapeItem({
           <FontToolbar
             x={data.x}
             y={data.y}
+            zoom={view.s}
             fontSize={fontSize}
             fontFamily={data.fontFamily ?? "ui"}
             textAlign={data.textAlign ?? "center"}
@@ -1771,6 +1857,7 @@ function TextItem({
         <FontToolbar
           x={data.x}
           y={data.y}
+          zoom={view.s}
           fontSize={fontSize}
           fontFamily={data.fontFamily ?? "ui"}
           textAlign={data.textAlign ?? "left"}
