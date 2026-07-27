@@ -217,6 +217,10 @@
   cursor: pointer;
 }
 .swatchBtn.swatchActive { border-color: var(--accent); }
+/* F6: "auto" text-color swatch (undefined -> theme-aware var(--ink)) shown
+   first in the text-color row, styled with the token itself rather than a
+   fixed hex so it visibly tracks the current theme. */
+.swatchInk { background: var(--ink); }
 
 /* ---- arrow curvature + endpoint handles ---- */
 .curveHandle {

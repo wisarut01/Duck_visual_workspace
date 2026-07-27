@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styles from "./Canvas.module.css";
 import topbarStyles from "./BoardShell.module.css";
-import { NOTE_COLORS } from "@/lib/palette";
+import { NOTE_COLORS, TEXT_COLORS } from "@/lib/palette";
 import { touchBoard } from "@/lib/api";
 import {
   type BoardDoc,
@@ -128,6 +128,49 @@ const FONT_STACK: Record<import("@/lib/board-doc").FontFamily, string> = {
   mono: "var(--font-mono)",
 };
 
+// F6: a contentEditable body's native Ctrl/Cmd+B/I/U inserts <b>/<i>/<u>
+// tags that onBlur's `textContent` read then silently discards, losing the
+// edit. Suppress those keys and route them to the element-level style
+// fields instead (bold/italic/underline are whole-element, not
+// per-character — see the TextStyleFields comment in board-doc.ts).
+function handleStyleKeyDown(
+  e: React.KeyboardEvent,
+  current: { bold?: boolean; italic?: boolean; underline?: boolean },
+  onChange: (patch: { bold?: boolean; italic?: boolean; underline?: boolean }) => void,
+) {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  const k = e.key.toLowerCase();
+  if (k === "b") {
+    e.preventDefault();
+    onChange({ bold: !current.bold });
+  } else if (k === "i") {
+    e.preventDefault();
+    onChange({ italic: !current.italic });
+  } else if (k === "u") {
+    e.preventDefault();
+    onChange({ underline: !current.underline });
+  }
+}
+
+// Leaves fontWeight/fontStyle/textDecoration undefined (not "normal"/400)
+// when the flag is off, so each kind's own CSS default keeps applying —
+// note/shape/text each start from a different base weight today (400/500/600
+// respectively; see .noteBody/.shapeBody/.textBody in Canvas.module.css) and
+// this must not flatten that.
+function bodyStyleFields(data: {
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  textColor?: number;
+}): { fontWeight: number | undefined; fontStyle: string | undefined; textDecoration: string | undefined; color: string | undefined } {
+  return {
+    fontWeight: data.bold ? 700 : undefined,
+    fontStyle: data.italic ? "italic" : undefined,
+    textDecoration: data.underline ? "underline" : undefined,
+    color: data.textColor !== undefined ? TEXT_COLORS[data.textColor]?.hex : undefined,
+  };
+}
+
 const FONT_SIZE_MIN = 10;
 const FONT_SIZE_MAX = 96;
 const FONT_SIZE_STEP = 2;
@@ -166,6 +209,10 @@ export function ElementToolbar({
   color,
   strokeWidth,
   filled,
+  bold,
+  italic,
+  underline,
+  textColor,
   onChange,
 }: {
   x: number;
@@ -177,6 +224,10 @@ export function ElementToolbar({
   color?: number;
   strokeWidth?: number;
   filled?: boolean;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  textColor?: number;
   onChange: (patch: {
     fontSize?: number;
     fontFamily?: import("@/lib/board-doc").FontFamily;
@@ -184,6 +235,10 @@ export function ElementToolbar({
     color?: number;
     strokeWidth?: number;
     filled?: boolean;
+    bold?: boolean;
+    italic?: boolean;
+    underline?: boolean;
+    textColor?: number;
   }) => void;
 }) {
   const showColor = kind === "note" || kind === "shape";
@@ -276,6 +331,50 @@ export function ElementToolbar({
           </button>
         </>
       )}
+      <div className={styles.ftSep} />
+      <div className={styles.ctGroup}>
+        <button
+          className={bold ? styles.ftActive : ""}
+          title="Bold"
+          style={{ fontWeight: 700 }}
+          onClick={() => onChange({ bold: !bold })}
+        >
+          B
+        </button>
+        <button
+          className={italic ? styles.ftActive : ""}
+          title="Italic"
+          style={{ fontStyle: "italic" }}
+          onClick={() => onChange({ italic: !italic })}
+        >
+          I
+        </button>
+        <button
+          className={underline ? styles.ftActive : ""}
+          title="Underline"
+          style={{ textDecoration: "underline" }}
+          onClick={() => onChange({ underline: !underline })}
+        >
+          U
+        </button>
+      </div>
+      <div className={styles.ftSep} />
+      <div className={styles.ctGroup}>
+        <button
+          className={`${styles.swatchBtn} ${styles.swatchInk} ${textColor === undefined ? styles.swatchActive : ""}`}
+          title="Auto text color (theme default)"
+          onClick={() => onChange({ textColor: undefined })}
+        />
+        {TEXT_COLORS.map((c, i) => (
+          <button
+            key={c.name}
+            className={`${styles.swatchBtn} ${textColor === i ? styles.swatchActive : ""}`}
+            style={{ background: c.hex }}
+            title={`Text color ${c.name}`}
+            onClick={() => onChange({ textColor: i })}
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -1639,10 +1738,16 @@ function NoteItem({
             bodyRef.current = el;
           }}
           className={styles.noteBody}
-          style={{ fontSize, fontFamily: FONT_STACK[data.fontFamily ?? "ui"], textAlign: data.textAlign ?? "left" }}
+          style={{
+            fontSize,
+            fontFamily: FONT_STACK[data.fontFamily ?? "ui"],
+            textAlign: data.textAlign ?? "left",
+            ...bodyStyleFields(data),
+          }}
           contentEditable
           suppressContentEditableWarning
           onBlur={(e) => updateFields(board.doc, board.notes, id, { body: e.currentTarget.textContent ?? "" })}
+          onKeyDown={(e) => handleStyleKeyDown(e, data, (patch) => updateFields(board.doc, board.notes, id, patch))}
         >
           {data.body}
         </div>
@@ -1659,6 +1764,10 @@ function NoteItem({
           textAlign={data.textAlign ?? "left"}
           kind="note"
           color={data.color}
+          bold={data.bold}
+          italic={data.italic}
+          underline={data.underline}
+          textColor={data.textColor}
           onChange={(patch) => updateFields(board.doc, board.notes, id, patch)}
         />
       )}
@@ -1770,10 +1879,16 @@ function ShapeItem({
             bodyRef.current = el;
           }}
           className={styles.shapeBody}
-          style={{ fontSize, fontFamily: FONT_STACK[data.fontFamily ?? "ui"], textAlign: data.textAlign ?? "center" }}
+          style={{
+            fontSize,
+            fontFamily: FONT_STACK[data.fontFamily ?? "ui"],
+            textAlign: data.textAlign ?? "center",
+            ...bodyStyleFields(data),
+          }}
           contentEditable
           suppressContentEditableWarning
           onBlur={(e) => updateFields(board.doc, board.shapes, id, { body: e.currentTarget.textContent ?? "" })}
+          onKeyDown={(e) => handleStyleKeyDown(e, data, (patch) => updateFields(board.doc, board.shapes, id, patch))}
         >
           {data.body}
         </div>
@@ -1818,6 +1933,10 @@ function ShapeItem({
             color={data.color}
             strokeWidth={strokeWidth}
             filled={filled}
+            bold={data.bold}
+            italic={data.italic}
+            underline={data.underline}
+            textColor={data.textColor}
             onChange={(patch) => updateFields(board.doc, board.shapes, id, patch)}
           />
         </>
@@ -1857,10 +1976,16 @@ function TextItem({
             bodyRef.current = el;
           }}
           className={styles.textBody}
-          style={{ fontSize, fontFamily: FONT_STACK[data.fontFamily ?? "ui"], textAlign: data.textAlign ?? "left" }}
+          style={{
+            fontSize,
+            fontFamily: FONT_STACK[data.fontFamily ?? "ui"],
+            textAlign: data.textAlign ?? "left",
+            ...bodyStyleFields(data),
+          }}
           contentEditable
           suppressContentEditableWarning
           onBlur={(e) => updateFields(board.doc, board.texts, id, { body: e.currentTarget.textContent ?? "" })}
+          onKeyDown={(e) => handleStyleKeyDown(e, data, (patch) => updateFields(board.doc, board.texts, id, patch))}
         >
           {data.body}
         </div>
@@ -1873,6 +1998,10 @@ function TextItem({
           fontFamily={data.fontFamily ?? "ui"}
           textAlign={data.textAlign ?? "left"}
           kind="text"
+          bold={data.bold}
+          italic={data.italic}
+          underline={data.underline}
+          textColor={data.textColor}
           onChange={(patch) => updateFields(board.doc, board.texts, id, patch)}
         />
       )}
