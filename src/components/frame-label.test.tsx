@@ -24,6 +24,7 @@ function setup(viewS: number) {
       allShapes={[]}
       allTexts={[]}
       allArrows={[]}
+      allImages={[]}
     />,
   );
 }
