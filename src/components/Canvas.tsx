@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styles from "./Canvas.module.css";
 import topbarStyles from "./BoardShell.module.css";
 import { NOTE_COLORS, TEXT_COLORS, textColorVar } from "@/lib/palette";
-import { touchBoard } from "@/lib/api";
+import { touchBoard, fetchMe, uploadImage } from "@/lib/api";
 import {
   type BoardDoc,
   type NoteData,
@@ -13,6 +13,7 @@ import {
   type TextData,
   type FrameData,
   type ArrowData,
+  type ImageData,
   type ShapeKind,
   type Presence,
   type TextAlign,
@@ -27,6 +28,7 @@ import {
   addText,
   addFrame,
   addArrow,
+  addImage,
   updateFields,
   deleteObj,
   getBoardName,
@@ -36,6 +38,13 @@ import {
 import { useYCollection } from "@/hooks/useYCollection";
 import { elbowPoints, roundedPath, elbowMidpoint } from "@/lib/connector-path";
 import { toolbarStyle, centeredToolbarStyle, counterScale, screenPxToWorld, zoomInv } from "@/lib/screen-space";
+// Note: not importing aspect-resize's `Corner` type — Canvas.tsx already
+// declares its own identical "nw"|"ne"|"sw"|"se" union locally (used by the
+// shared ResizeHandles component below); importing a second, structurally
+// identical `Corner` under the same name would collide with it.
+import { aspectResize } from "@/lib/aspect-resize";
+import { objectBounds, objectsInRegion, type Rect as ExportRect } from "@/lib/export-bounds";
+import { exportToPdf, type DrawableObject, type ResolvedArrowData } from "@/lib/export-pdf";
 import ThemeToggle from "./ThemeToggle";
 import type { WebsocketProvider } from "y-websocket";
 
@@ -44,8 +53,8 @@ interface RemotePresence extends Presence {
   clientId: number;
 }
 
-type Tool = "select" | "pan" | "note" | "text" | "rect" | "ellipse" | "diamond" | "frame" | "arrow";
-type ObjKind = "note" | "shape" | "text" | "frame" | "arrow";
+type Tool = "select" | "pan" | "note" | "text" | "rect" | "ellipse" | "diamond" | "frame" | "arrow" | "image";
+type ObjKind = "note" | "shape" | "text" | "frame" | "arrow" | "image";
 type Selection = { kind: ObjKind; id: string } | null;
 
 interface ViewState {
@@ -183,6 +192,19 @@ const FONT_SIZE_MAX = 96;
 const FONT_SIZE_STEP = 2;
 const ARROW_SNAP_PAD_PX = 28;
 const ARROW_STROKE_PRESETS = [1.5, 2.5, 4, 6.5];
+// F1b export menu — plain inline style object (not a CSS module class) so
+// this feature adds zero lines to Canvas.module.css, kept minimal on
+// purpose while other agents are concurrently editing that same file.
+const EXPORT_MENU_ITEM_STYLE: React.CSSProperties = {
+  textAlign: "left",
+  padding: "8px 10px",
+  border: 0,
+  borderRadius: 6,
+  background: "transparent",
+  color: "var(--ink)",
+  font: "600 13px var(--font-ui)",
+  cursor: "pointer",
+};
 const ARROW_STROKE_DEFAULT = 2.5;
 const ARROW_HEAD_STYLES: ArrowHead[] = ["none", "arrow", "triangle", "circle", "diamond"];
 const ROUTING_MODES: Routing[] = ["straight", "curved", "elbow"];
@@ -706,6 +728,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
   const texts = useYCollection<TextData>(board.texts);
   const frames = useYCollection<FrameData>(board.frames);
   const arrows = useYCollection<ArrowData>(board.arrows);
+  const images = useYCollection<ImageData>(board.images);
 
   const [view, setView] = useState<ViewState>({ x: 0, y: 0, s: 1 });
   useEffect(() => {
@@ -792,16 +815,6 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
     });
   }
 
-  // Broadcast local cursor in world coords, throttled to one update per
-  // animation frame so rapid mousemove doesn't flood awareness broadcasts.
-  const cursorRaf = useRef(0);
-  const broadcastCursor = useCallback((wx: number | null, wy: number | null) => {
-    if (cursorRaf.current) return;
-    cursorRaf.current = requestAnimationFrame(() => {
-      cursorRaf.current = 0;
-      providerRef.current?.awareness.setLocalStateField("cursor", wx === null ? null : { x: wx, y: wy });
-    });
-  }, []);
 
   // ================= follow a peer's camera (epic 5) =================
   const [followingId, setFollowingId] = useState<number | null>(null);
@@ -864,6 +877,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
         text: board.texts,
         frame: board.frames,
         arrow: board.arrows,
+        image: board.images,
       };
       deleteObj(board.doc, containers[sel.kind], sel.id);
       setSelection(null);
@@ -970,9 +984,205 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
     setSelection({ kind: "shape", id: newId });
     setJustCreated(newId);
   }
+  // ================= F1a: images =================
+  // Uploads require a real account even though the board itself allows
+  // anonymous joining (see JoinCard) — an unauthenticated upload endpoint
+  // would make the Storage bucket an open file host for anyone with the
+  // URL. This is a one-shot fetch-then-setState on mount, same pattern
+  // /dashboard already uses for the same check.
+  const [isSignedIn, setIsSignedIn] = useState(false);
+  useEffect(() => {
+    fetchMe().then(({ data }) => {
+      setIsSignedIn(!!data.user);
+    });
+  }, []);
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  async function placeUploadedImage(url: string, width: number | null, height: number | null) {
+    const place = (naturalW: number, naturalH: number) => {
+      const long = Math.max(naturalW, naturalH) || 1;
+      const scale = Math.min(1, 400 / long);
+      const w = naturalW * scale;
+      const h = naturalH * scale;
+      const center = screenToWorld(window.innerWidth / 2, window.innerHeight / 2);
+      const id = addImage(board, center.x - w / 2, center.y - h / 2, w, h, url, naturalW, naturalH);
+      setSelection({ kind: "image", id });
+    };
+    if (width && height) {
+      place(width, height);
+      return;
+    }
+    // Server-side dimension parsing doesn't cover every allowed format (see
+    // image-dimensions.ts) — fall back to measuring the uploaded image
+    // client-side once it's loaded.
+    await new Promise<void>((resolve) => {
+      const img = new window.Image();
+      img.onload = () => {
+        place(img.naturalWidth || 400, img.naturalHeight || 400);
+        resolve();
+      };
+      img.onerror = () => {
+        place(400, 400);
+        resolve();
+      };
+      img.src = url;
+    });
+  }
+
+  async function onImageFileSelected(file: File) {
+    const { ok, data } = await uploadImage(file);
+    if (!ok || !data.url) {
+      window.alert(data.error ?? "Image upload failed.");
+      return;
+    }
+    await placeUploadedImage(data.url, data.width ?? null, data.height ?? null);
+  }
+
+  // Clicking the toolbar's image tool (or pressing "I") opens the file
+  // picker immediately rather than entering a persistent draw-mode like
+  // rect/ellipse/etc — there's nothing to drag-to-draw, so "image" reverts
+  // to "select" the instant it's chosen. This is a one-shot reaction to a
+  // tool switch, same shape as `justCreated`'s consume-and-clear effect below.
+  useEffect(() => {
+    if (tool === "image") {
+      if (isSignedIn) fileInputRef.current?.click();
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setTool("select");
+    }
+  }, [tool, isSignedIn]);
+
+  // ================= F1b: PDF export =================
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [exportSelecting, setExportSelecting] = useState(false);
+  const exportMarqueeRef = useRef<{ sx: number; sy: number } | null>(null);
+  const [exportMarqueePreview, setExportMarqueePreview] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+
+  // Reuses the same `shapesById` map ArrowItem/AttractAnchors rely on
+  // (defined further down this component, but this function is only ever
+  // *called* from a later event handler, by which point that const has
+  // long since been assigned for the current render).
+  function resolveArrowsForExport(): { id: string; data: ResolvedArrowData }[] {
+    return arrows.map(({ id, data }) => {
+      const boundA = data.from ? shapesById.get(data.from.id) : undefined;
+      const boundB = data.to ? shapesById.get(data.to.id) : undefined;
+      const resolvedA = boundA && data.from ? resolveBinding(boundA, data.from.side, data.x2, data.y2) : null;
+      const resolvedB =
+        boundB && data.to
+          ? resolveBinding(
+              boundB,
+              data.to.side,
+              resolvedA ? resolvedA.point.x : data.x1,
+              resolvedA ? resolvedA.point.y : data.y1,
+            )
+          : null;
+      return {
+        id,
+        data: {
+          ...data,
+          x1: resolvedA ? resolvedA.point.x : data.x1,
+          y1: resolvedA ? resolvedA.point.y : data.y1,
+          x2: resolvedB ? resolvedB.point.x : data.x2,
+          y2: resolvedB ? resolvedB.point.y : data.y2,
+          sideA: resolvedA?.side,
+          sideB: resolvedB?.side,
+        },
+      };
+    });
+  }
+
+  async function runExport(region: ExportRect, filename: string) {
+    const arrowsResolved = resolveArrowsForExport();
+    const candidates = [
+      ...notes.map(({ id, data }) => ({ id, bounds: objectBounds("note", data) })),
+      ...shapes.map(({ id, data }) => ({ id, bounds: objectBounds("shape", data) })),
+      ...texts.map(({ id, data }) => ({ id, bounds: objectBounds("text", data) })),
+      ...frames.map(({ id, data }) => ({ id, bounds: objectBounds("frame", data) })),
+      ...images.map(({ id, data }) => ({ id, bounds: objectBounds("image", data) })),
+      ...arrowsResolved.map(({ id, data }) => ({ id, bounds: objectBounds("arrow", data) })),
+    ];
+    // Object ids are prefixed per-kind by newId() in board-doc.ts
+    // (note-/shape-/text-/frame-/image-/arrow-), so a plain id is already
+    // unique across every collection here — no compound key needed.
+    const includedIds = new Set(objectsInRegion(candidates, region).map((o) => o.id));
+
+    const drawables: DrawableObject[] = [];
+    for (const { id, data } of notes) if (includedIds.has(id)) drawables.push({ kind: "note", id, data });
+    for (const { id, data } of shapes) if (includedIds.has(id)) drawables.push({ kind: "shape", id, data });
+    for (const { id, data } of texts) if (includedIds.has(id)) drawables.push({ kind: "text", id, data });
+    for (const { id, data } of frames) if (includedIds.has(id)) drawables.push({ kind: "frame", id, data });
+    for (const { id, data } of images) if (includedIds.has(id)) drawables.push({ kind: "image", id, data });
+    for (const { id, data } of arrowsResolved) if (includedIds.has(id)) drawables.push({ kind: "arrow", id, data });
+
+    if (drawables.length === 0) {
+      window.alert("Nothing to export in that region.");
+      return;
+    }
+    await exportToPdf(drawables, region, filename);
+  }
+
+  function exportWholeBoard() {
+    setExportMenuOpen(false);
+    const all = [
+      ...notes.map(({ data }) => objectBounds("note", data)),
+      ...shapes.map(({ data }) => objectBounds("shape", data)),
+      ...texts.map(({ data }) => objectBounds("text", data)),
+      ...frames.map(({ data }) => objectBounds("frame", data)),
+      ...images.map(({ data }) => objectBounds("image", data)),
+      ...resolveArrowsForExport().map(({ data }) => objectBounds("arrow", data)),
+    ];
+    if (all.length === 0) {
+      window.alert("Board is empty — nothing to export.");
+      return;
+    }
+    const margin = 40;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const r of all) {
+      minX = Math.min(minX, r.x);
+      minY = Math.min(minY, r.y);
+      maxX = Math.max(maxX, r.x + r.w);
+      maxY = Math.max(maxY, r.y + r.h);
+    }
+    const region: ExportRect = { x: minX - margin, y: minY - margin, w: maxX - minX + margin * 2, h: maxY - minY + margin * 2 };
+    runExport(region, `${boardName || roomId}.pdf`);
+  }
+
+  function exportSelectedFrame() {
+    setExportMenuOpen(false);
+    if (!selection || selection.kind !== "frame") return;
+    const f = frames.find((x) => x.id === selection.id);
+    if (!f) return;
+    runExport(objectBounds("frame", f.data), `${boardName || roomId}-frame.pdf`);
+  }
+
+  function startExportSelectArea() {
+    setExportMenuOpen(false);
+    setExportSelecting(true);
+  }
+
+  // Broadcast local cursor in world coords, throttled to one update per
+  // animation frame so rapid mousemove doesn't flood awareness broadcasts.
+  const cursorRaf = useRef(0);
+  const broadcastCursor = useCallback((wx: number | null, wy: number | null) => {
+    if (cursorRaf.current) return;
+    cursorRaf.current = requestAnimationFrame(() => {
+      cursorRaf.current = 0;
+      providerRef.current?.awareness.setLocalStateField("cursor", wx === null ? null : { x: wx, y: wy });
+    });
+  }, []);
 
   function onViewportPointerDown(e: React.PointerEvent) {
     const w = screenToWorld(e.clientX, e.clientY);
+
+    // F1b "Select area…" export: a self-contained marquee mode layered on
+    // top of the normal tool handling (guarded first, returns early) rather
+    // than threaded through the tool switch below — it isn't a `Tool`,
+    // just a one-shot region pick.
+    if (exportSelecting) {
+      exportMarqueeRef.current = { sx: w.x, sy: w.y };
+      setExportMarqueePreview({ x: w.x, y: w.y, w: 0, h: 0 });
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      return;
+    }
 
     if (tool === "pan") {
       stopFollow();
@@ -1016,6 +1226,17 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
     const wp = screenToWorld(e.clientX, e.clientY);
     broadcastCursor(wp.x, wp.y);
 
+    if (exportMarqueeRef.current) {
+      const m = exportMarqueeRef.current;
+      setExportMarqueePreview({
+        x: Math.min(m.sx, wp.x),
+        y: Math.min(m.sy, wp.y),
+        w: Math.abs(wp.x - m.sx),
+        h: Math.abs(wp.y - m.sy),
+      });
+      return;
+    }
+
     if (anchorPendingRef.current) {
       const p = anchorPendingRef.current;
       const dist = Math.hypot(e.clientX - p.startClientX, e.clientY - p.startClientY);
@@ -1057,6 +1278,21 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
   }
 
   function onViewportPointerUp(e: React.PointerEvent) {
+    if (exportMarqueeRef.current) {
+      const m = exportMarqueeRef.current;
+      const w = screenToWorld(e.clientX, e.clientY);
+      exportMarqueeRef.current = null;
+      setExportMarqueePreview(null);
+      setExportSelecting(false);
+      const region: ExportRect = {
+        x: Math.min(m.sx, w.x),
+        y: Math.min(m.sy, w.y),
+        w: Math.abs(w.x - m.sx),
+        h: Math.abs(w.y - m.sy),
+      };
+      if (region.w >= 8 && region.h >= 8) runExport(region, `${boardName || roomId}-selection.pdf`);
+      return;
+    }
     if (anchorPendingRef.current) {
       // Pointer never moved past the click threshold: quick-create instead
       // of the connector-drag flow below (Epic C).
@@ -1186,11 +1422,12 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
       }
       if (e.key === "Escape") {
         setSelection(null);
+        setExportSelecting(false);
         return;
       }
       const map: Record<string, Tool> = {
         v: "select", h: "pan", n: "note", t: "text",
-        r: "rect", o: "ellipse", d: "diamond", a: "arrow", f: "frame",
+        r: "rect", o: "ellipse", d: "diamond", a: "arrow", f: "frame", i: "image",
       };
       const k = e.key.toLowerCase();
       if (map[k]) setTool(map[k]);
@@ -1203,7 +1440,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
     styles.viewport,
     tool === "pan" ? styles.toolPan : "",
     panning ? styles.panning : "",
-    ["rect", "ellipse", "diamond", "frame", "arrow"].includes(tool) ? styles.toolDraw : "",
+    ["rect", "ellipse", "diamond", "frame", "arrow"].includes(tool) || exportSelecting ? styles.toolDraw : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -1274,6 +1511,19 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
           />
         ))}
 
+        {images.map(({ id, data }) => (
+          <ImageItem
+            key={id}
+            board={board}
+            id={id}
+            data={data}
+            view={view}
+            tool={tool}
+            selected={selection?.kind === "image" && selection.id === id}
+            onSelect={setSelection}
+          />
+        ))}
+
         {shapes.map(({ id, data }) => (
           <ShapeItem
             key={id}
@@ -1335,6 +1585,21 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
           />
         )}
 
+        {exportMarqueePreview && (
+          <div
+            style={{
+              position: "absolute",
+              left: exportMarqueePreview.x,
+              top: exportMarqueePreview.y,
+              width: exportMarqueePreview.w,
+              height: exportMarqueePreview.h,
+              border: "2px dashed var(--accent)",
+              background: "var(--accent-soft)",
+              pointerEvents: "none",
+            }}
+          />
+        )}
+
         {remotePeers.map(
           (p) =>
             p.cursor && (
@@ -1365,6 +1630,51 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
             onChange={(e) => renameBoard(e.target.value)}
           />
           <small>{roomId.toUpperCase()}</small>
+        </div>
+
+        <div style={{ position: "relative" }} onPointerDown={(e) => e.stopPropagation()}>
+          <button
+            className={topbarStyles.shareBtn}
+            style={{ background: "var(--ink-soft)" }}
+            onClick={() => setExportMenuOpen((o) => !o)}
+            title="Export part of the board as a PDF"
+          >
+            Export
+          </button>
+          {exportMenuOpen && (
+            <div
+              style={{
+                position: "absolute",
+                top: "calc(100% + 6px)",
+                right: 0,
+                minWidth: 180,
+                background: "var(--panel)",
+                border: "1px solid var(--panel-border)",
+                boxShadow: "var(--panel-shadow)",
+                borderRadius: "var(--r-panel)",
+                padding: 6,
+                display: "flex",
+                flexDirection: "column",
+                gap: 2,
+                zIndex: 1100,
+              }}
+            >
+              <button onClick={exportWholeBoard} style={EXPORT_MENU_ITEM_STYLE}>
+                Whole board
+              </button>
+              <button
+                onClick={exportSelectedFrame}
+                disabled={selection?.kind !== "frame"}
+                style={{ ...EXPORT_MENU_ITEM_STYLE, opacity: selection?.kind === "frame" ? 1 : 0.45 }}
+                title={selection?.kind === "frame" ? undefined : "Select a frame first"}
+              >
+                This frame
+              </button>
+              <button onClick={startExportSelectArea} style={EXPORT_MENU_ITEM_STYLE}>
+                Select area…
+              </button>
+            </div>
+          )}
         </div>
 
         <button
@@ -1460,6 +1770,27 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
         <ToolButton tool="frame" current={tool} onClick={setTool} title="Frame (F)">
           <path d="M7 3v18M17 3v18M3 7h18M3 17h18" fill="none" stroke="currentColor" strokeWidth={2} />
         </ToolButton>
+        <ToolButton
+          tool="image"
+          current={tool}
+          onClick={setTool}
+          title={isSignedIn ? "Insert image (I)" : "Sign in to add images"}
+        >
+          <rect x={4} y={4} width={16} height={16} rx={2} fill="none" stroke="currentColor" strokeWidth={2} />
+          <circle cx={9} cy={9.5} r={1.6} fill="currentColor" />
+          <path d="M5 16l4.5-5 3.5 4 2-2.5L19 16" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+        </ToolButton>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/gif,image/webp"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.target.value = ""; // allow re-selecting the same file next time
+            if (f) onImageFileSelected(f);
+          }}
+        />
         <div className={styles.sep} />
         <div className={styles.swatches}>
           {NOTE_COLORS.map((c, i) => (
@@ -2194,6 +2525,111 @@ function TextItem({
           onChange={(patch) => updateFields(board.doc, board.texts, id, patch)}
           onDelete={() => onDelete({ kind: "text", id })}
         />
+      )}
+    </>
+  );
+}
+
+// F1a: an uploaded image. Drag/select reuses `useSimpleDrag` like every
+// other free-standing object; resize is aspect-ratio-locked via
+// aspect-resize.ts (a squashed photo reads as broken in a way a squashed
+// rect does not — PLAN.md), which is why this doesn't reuse the shared
+// `ResizeHandles` component (that one resizes each axis independently on
+// purpose, for shapes/frames). The four corner handles below reuse the same
+// `.resizeHandle`/`.rh-*` CSS classes as `ResizeHandles` purely for a
+// consistent look — no shared component code, so no shared-file risk with
+// the other agents also touching ResizeHandles/FontToolbar in this batch.
+function ImageItem({
+  board,
+  id,
+  data,
+  view,
+  tool,
+  selected,
+  onSelect,
+}: {
+  board: BoardDoc;
+  id: string;
+  data: ImageData;
+  view: ViewState;
+  tool: Tool;
+  selected: boolean;
+  onSelect: (s: Selection) => void;
+}) {
+  // useSimpleDrag's double-click branch focuses this ref — unused here
+  // since an image has no editable body, so it stays null and the
+  // `?.focus()` inside useSimpleDrag is just a no-op.
+  const bodyRef = useRef<HTMLElement | null>(null);
+  const drag = useSimpleDrag(board, board.images, "image", id, data.x, data.y, view, tool, onSelect, bodyRef);
+
+  const aspect = data.naturalW > 0 && data.naturalH > 0 ? data.naturalW / data.naturalH : data.w / (data.h || 1) || 1;
+  const resizeDragRef = useRef<{
+    corner: Corner;
+    sx: number;
+    sy: number;
+    start: { x: number; y: number; w: number; h: number };
+  } | null>(null);
+
+  function startResize(corner: Corner) {
+    return (e: React.PointerEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      resizeDragRef.current = { corner, sx: e.clientX, sy: e.clientY, start: { x: data.x, y: data.y, w: data.w, h: data.h } };
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    };
+  }
+  function onResizeMove(e: React.PointerEvent) {
+    const s = resizeDragRef.current;
+    if (!s) return;
+    const dx = (e.clientX - s.sx) / view.s;
+    const dy = (e.clientY - s.sy) / view.s;
+    const next = aspectResize(s.corner, s.start, dx, dy, aspect, 40);
+    updateFields(board.doc, board.images, id, { x: next.x, y: next.y, w: next.w, h: next.h });
+  }
+  function onResizeUp(e: React.PointerEvent) {
+    resizeDragRef.current = null;
+    (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+  }
+
+  const corners: Corner[] = ["nw", "ne", "sw", "se"];
+
+  return (
+    <>
+      <div
+        style={{
+          position: "absolute",
+          left: data.x,
+          top: data.y,
+          width: data.w,
+          height: data.h,
+          cursor: "grab",
+          outline: selected ? "2px solid var(--accent)" : "none",
+          outlineOffset: 2,
+          borderRadius: 4,
+          overflow: "hidden",
+        }}
+        {...drag}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element -- arbitrary user-uploaded Supabase Storage URLs, not build-time-known assets next/image can optimize */}
+        <img
+          src={data.url}
+          alt=""
+          draggable={false}
+          style={{ width: "100%", height: "100%", objectFit: "fill", pointerEvents: "none", display: "block" }}
+        />
+      </div>
+      {selected && (
+        <div style={{ position: "absolute", left: data.x, top: data.y, width: data.w, height: data.h, pointerEvents: "none" }}>
+          {corners.map((c) => (
+            <div
+              key={c}
+              className={`${styles.resizeHandle} ${styles["rh-" + c]}`}
+              onPointerDown={startResize(c)}
+              onPointerMove={onResizeMove}
+              onPointerUp={onResizeUp}
+            />
+          ))}
+        </div>
       )}
     </>
   );
