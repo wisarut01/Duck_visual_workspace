@@ -33,7 +33,22 @@ export interface Binding {
   side: Side | "auto";
 }
 
-export interface NoteData {
+// F6 (text styling): bold/italic/underline/textColor are whole-element
+// properties, not per-character rich text — `body`/`label` are still plain
+// strings, not Y.Text (see the module comment above), so there is no way to
+// style a sub-range of one. Undefined always means false / theme-default,
+// matching every element's rendering before this field existed.
+export interface TextStyleFields {
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  // Index into palette.ts's TEXT_COLORS. Undefined means "auto" — renders
+  // as the theme-aware `var(--ink)` — and must stay that way rather than
+  // being resolved to a concrete hex at write time, or dark mode breaks.
+  textColor?: number;
+}
+
+export interface NoteData extends TextStyleFields {
   x: number;
   y: number;
   color: number;
@@ -44,7 +59,7 @@ export interface NoteData {
   fontFamily?: FontFamily;
   textAlign?: TextAlign;
 }
-export interface ShapeData {
+export interface ShapeData extends TextStyleFields {
   kind: ShapeKind;
   x: number;
   y: number;
@@ -55,8 +70,14 @@ export interface ShapeData {
   fontSize?: number;
   fontFamily?: FontFamily;
   textAlign?: TextAlign;
+  // F3 (shape styling): border width in world units. Undefined renders as
+  // today's hardcoded `.shape { border: 2.5px solid }`.
+  strokeWidth?: number;
+  // F3: undefined/true = today's `${c.bg}2e` tinted background; false = a
+  // transparent, outline-only shape.
+  filled?: boolean;
 }
-export interface TextData {
+export interface TextData extends TextStyleFields {
   x: number;
   y: number;
   body: string;

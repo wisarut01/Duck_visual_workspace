@@ -16,6 +16,7 @@ function setup(viewS: number) {
       id={id}
       data={data}
       view={{ x: 0, y: 0, s: viewS }}
+      onDelete={() => {}}
       selected={false}
       onSelect={() => {}}
       registerBody={() => {}}

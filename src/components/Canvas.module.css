@@ -223,6 +223,7 @@
   left: 0;
   bottom: 0;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 3px;
   background: var(--panel);
@@ -232,8 +233,11 @@
   font: 600 13px/1 var(--font-mono);
   color: var(--ink-soft);
   z-index: 5;
-  white-space: nowrap;
   box-shadow: var(--panel-shadow);
+  /* F3: the toolbar grew past a phone's width once color/thickness/fill/
+     B-I-U/text-color/delete groups landed, so it wraps to a second row
+     instead. No `white-space: nowrap` here — that would defeat the wrap. */
+  max-width: 420px;
 }
 .fontToolbar button {
   min-width: 36px;
@@ -250,6 +254,23 @@
 .fontToolbar button.ftActive { background: var(--accent-soft); color: var(--accent); }
 .fontToolbar span { min-width: 20px; text-align: center; font-variant-numeric: tabular-nums; }
 .ftSep { width: 1px; height: 18px; background: var(--panel-border); margin: 0 3px; }
+
+/* ---- F3: shape/note color swatch group (shared with the tool palette's
+   .sw, but sized for the toolbar row and ring-highlighted with --accent
+   instead of --ink so it reads consistently with the rest of this toolbar) --- */
+.swatchBtn {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  padding: 0;
+  border: 2px solid transparent;
+  cursor: pointer;
+}
+.swatchBtn.swatchActive { border-color: var(--accent); }
+/* F6: "auto" text-color swatch (undefined -> theme-aware var(--ink)) shown
+   first in the text-color row, styled with the token itself rather than a
+   fixed hex so it visibly tracks the current theme. */
+.swatchInk { background: var(--ink); }
 
 /* ---- arrow curvature + endpoint handles ---- */
 .curveHandle {
@@ -325,6 +346,21 @@
   text-transform: capitalize;
 }
 .ctGroup { display: flex; align-items: center; gap: 2px; }
+/* ---- F4: on-canvas delete button, shared by ElementToolbar + ConnectorToolbar ---- */
+.ctDeleteGroup { margin-left: 8px; display: flex; align-items: center; }
+.deleteBtn {
+  height: 22px;
+  min-width: 22px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.deleteBtn:hover { background: var(--danger); color: #fff; }
 .ctLabel {
   font: 600 9px/1 var(--font-mono);
   color: var(--ink-faint);

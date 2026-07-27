@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styles from "./Canvas.module.css";
 import topbarStyles from "./BoardShell.module.css";
-import { NOTE_COLORS } from "@/lib/palette";
+import { NOTE_COLORS, TEXT_COLORS, textColorVar } from "@/lib/palette";
 import { touchBoard } from "@/lib/api";
 import {
   type BoardDoc,
@@ -129,6 +129,55 @@ const FONT_STACK: Record<import("@/lib/board-doc").FontFamily, string> = {
   mono: "var(--font-mono)",
 };
 
+// F6: a contentEditable body's native Ctrl/Cmd+B/I/U inserts <b>/<i>/<u>
+// tags that onBlur's `textContent` read then silently discards, losing the
+// edit. Suppress those keys and route them to the element-level style
+// fields instead (bold/italic/underline are whole-element, not
+// per-character — see the TextStyleFields comment in board-doc.ts).
+function handleStyleKeyDown(
+  e: React.KeyboardEvent,
+  current: { bold?: boolean; italic?: boolean; underline?: boolean },
+  onChange: (patch: { bold?: boolean; italic?: boolean; underline?: boolean }) => void,
+) {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  const k = e.key.toLowerCase();
+  if (k === "b") {
+    e.preventDefault();
+    onChange({ bold: !current.bold });
+  } else if (k === "i") {
+    e.preventDefault();
+    onChange({ italic: !current.italic });
+  } else if (k === "u") {
+    e.preventDefault();
+    onChange({ underline: !current.underline });
+  }
+}
+
+// Leaves fontWeight/fontStyle/textDecoration undefined (not "normal"/400)
+// when the flag is off, so each kind's own CSS default keeps applying —
+// note/shape/text each start from a different base weight today (400/500/600
+// respectively; see .noteBody/.shapeBody/.textBody in Canvas.module.css) and
+// this must not flatten that.
+function bodyStyleFields(
+  data: {
+    bold?: boolean;
+    italic?: boolean;
+    underline?: boolean;
+    textColor?: number;
+  },
+  // Sticky notes keep a pastel background in both themes, so their text must
+  // stay dark; shape/text bodies sit on the themed canvas and flip with it.
+  // See textColorVar()/TEXT_COLORS in src/lib/palette.ts.
+  colorVariant: "themed" | "fixed" = "themed",
+): { fontWeight: number | undefined; fontStyle: string | undefined; textDecoration: string | undefined; color: string | undefined } {
+  return {
+    fontWeight: data.bold ? 700 : undefined,
+    fontStyle: data.italic ? "italic" : undefined,
+    textDecoration: data.underline ? "underline" : undefined,
+    color: data.textColor !== undefined ? textColorVar(data.textColor, colorVariant) : undefined,
+  };
+}
+
 const FONT_SIZE_MIN = 10;
 const FONT_SIZE_MAX = 96;
 const FONT_SIZE_STEP = 2;
@@ -162,7 +211,7 @@ const FONT_TOOLBAR_GAP_PX = 8;
 // box's bottom edge and the connector's midpoint. Re-measured after F2's
 // ~1.35x control bump — was a hardcoded `width = 372` (unmeasured, per
 // PLAN.md's own note).
-const CONNECTOR_TOOLBAR_WIDTH_PX = 480;
+const CONNECTOR_TOOLBAR_WIDTH_PX = 620;
 const CONNECTOR_TOOLBAR_HEIGHT_PX = 48;
 const CONNECTOR_TOOLBAR_GAP_PX = 20;
 // F5: same constant-screen-gap idea, for the frame label tab and delete
@@ -188,10 +237,18 @@ const QUICK_CREATE_MAX_STEPS = 20;
 // pointerdown+up is a quick-create click; over it, it's a connector drag.
 const ANCHOR_CLICK_PX = 4;
 
+// Which kinds share this toolbar and which of its groups apply to each —
+// note/shape/text all get font controls; color is note+shape (F3); shape
+// alone additionally gets border thickness + fill toggle (F3).
+type ElementKind = "note" | "shape" | "text";
+
 // Shared floating control shown above a selected note/shape/text: font size
 // +/- and a sans/mono family toggle (the only two families DESIGN.md defines
 // — no serif, to keep the "engineering instrument" look, not "generic AI tool"),
-// plus a left/center/right text-align group (Epic D).
+// a left/center/right text-align group (Epic D), (F3) per-kind color /
+// border-thickness / fill-toggle groups, (F6) bold/italic/underline + text
+// color, and (F4) a delete button. Was `FontToolbar`; renamed + exported
+// once it grew beyond font controls.
 //
 // F2: `zoom` (view.s) drives a counter-scale (src/lib/screen-space.ts) so
 // this renders at a constant on-screen size regardless of zoom — it's a
@@ -199,14 +256,23 @@ const ANCHOR_CLICK_PX = 4;
 // without this it shrinks/grows with the canvas the same as a note or shape
 // would. `x`/`y` stay world coordinates (unchanged); only the toolbar's own
 // `transform` and its vertical offset from `y` are zoom-compensated.
-function FontToolbar({
+export function ElementToolbar({
   x,
   y,
   zoom,
   fontSize,
   fontFamily,
   textAlign,
+  kind,
+  color,
+  strokeWidth,
+  filled,
+  bold,
+  italic,
+  underline,
+  textColor,
   onChange,
+  onDelete,
 }: {
   x: number;
   y: number;
@@ -214,10 +280,26 @@ function FontToolbar({
   fontSize: number;
   fontFamily: import("@/lib/board-doc").FontFamily;
   textAlign: TextAlign;
+  kind: ElementKind;
+  color?: number;
+  strokeWidth?: number;
+  filled?: boolean;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  textColor?: number;
+  onDelete?: () => void;
   onChange: (patch: {
     fontSize?: number;
     fontFamily?: import("@/lib/board-doc").FontFamily;
     textAlign?: TextAlign;
+    color?: number;
+    strokeWidth?: number;
+    filled?: boolean;
+    bold?: boolean;
+    italic?: boolean;
+    underline?: boolean;
+    textColor?: number;
   }) => void;
 }) {
   // Zero-size positioning anchor at (x, y - gap) — see FONT_TOOLBAR_GAP_PX's
@@ -230,6 +312,9 @@ function FontToolbar({
     width: 0,
     height: 0,
   };
+  const showColor = kind === "note" || kind === "shape";
+  const showShapeControls = kind === "shape";
+  const isFilled = filled !== false;
   return (
     <div style={anchorStyle}>
       <div className={styles.fontToolbar} style={toolbarStyle(zoom)} onPointerDown={(e) => e.stopPropagation()}>
@@ -264,6 +349,122 @@ function FontToolbar({
             </svg>
           </button>
         ))}
+        {showColor && (
+          <>
+            <div className={styles.ftSep} />
+            <div className={styles.ctGroup}>
+              {NOTE_COLORS.map((c, i) => (
+                <button
+                  key={c.tag}
+                  className={`${styles.swatchBtn} ${color === i ? styles.swatchActive : ""}`}
+                  style={{ background: c.bg }}
+                  title={`Color ${c.tag}`}
+                  onClick={() => onChange({ color: i })}
+                />
+              ))}
+            </div>
+          </>
+        )}
+        {showShapeControls && (
+          <>
+            <div className={styles.ftSep} />
+            <div className={styles.ctGroup}>
+              {ARROW_STROKE_PRESETS.map((w) => (
+                <button
+                  key={w}
+                  className={strokeWidth === w ? styles.ftActive : ""}
+                  title={`${w}px`}
+                  onClick={() => onChange({ strokeWidth: w })}
+                >
+                  <svg width={18} height={16} viewBox="0 0 20 16">
+                    <line x1={2} y1={8} x2={18} y2={8} stroke="currentColor" strokeWidth={w} strokeLinecap="round" />
+                  </svg>
+                </button>
+              ))}
+            </div>
+            <div className={styles.ftSep} />
+            <button
+              className={!isFilled ? styles.ftActive : ""}
+              title={isFilled ? "Outline only" : "Fill"}
+              onClick={() => onChange({ filled: !isFilled })}
+            >
+              <svg width={15} height={15} viewBox="0 0 24 24">
+                <rect
+                  x={4}
+                  y={4}
+                  width={16}
+                  height={16}
+                  rx={3}
+                  fill={isFilled ? "currentColor" : "none"}
+                  stroke="currentColor"
+                  strokeWidth={2}
+                />
+              </svg>
+            </button>
+          </>
+        )}
+        <div className={styles.ftSep} />
+        <div className={styles.ctGroup}>
+          <button
+            className={bold ? styles.ftActive : ""}
+            title="Bold"
+            style={{ fontWeight: 700 }}
+            onClick={() => onChange({ bold: !bold })}
+          >
+            B
+          </button>
+          <button
+            className={italic ? styles.ftActive : ""}
+            title="Italic"
+            style={{ fontStyle: "italic" }}
+            onClick={() => onChange({ italic: !italic })}
+          >
+            I
+          </button>
+          <button
+            className={underline ? styles.ftActive : ""}
+            title="Underline"
+            style={{ textDecoration: "underline" }}
+            onClick={() => onChange({ underline: !underline })}
+          >
+            U
+          </button>
+        </div>
+        <div className={styles.ftSep} />
+        <div className={styles.ctGroup}>
+          <button
+            className={`${styles.swatchBtn} ${styles.swatchInk} ${textColor === undefined ? styles.swatchActive : ""}`}
+            title="Auto text color (theme default)"
+            onClick={() => onChange({ textColor: undefined })}
+          />
+          {TEXT_COLORS.map((c, i) => (
+            <button
+              key={c.name}
+              className={`${styles.swatchBtn} ${textColor === i ? styles.swatchActive : ""}`}
+              // Swatch shows the color as it will actually render in the
+              // active theme (see textColorVar / --text-N in globals.css).
+              style={{ background: textColorVar(i, "themed") }}
+              title={`Text color ${c.name}`}
+              onClick={() => onChange({ textColor: i })}
+            />
+          ))}
+        </div>
+        {onDelete && (
+          <div className={styles.ctDeleteGroup}>
+            <button className={styles.deleteBtn} title="Delete" onClick={onDelete}>
+              <svg width={15} height={15} viewBox="0 0 24 24">
+                <path
+                  d="M5 6h14M9 6V4h6v2M7 6l1 14h8l1-14"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -650,6 +851,26 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
   const [selection, setSelection] = useState<Selection>(null);
   const [justCreated, setJustCreated] = useState<string | null>(null);
 
+  // F4: single delete path shared by the keyboard shortcut and every
+  // on-canvas delete button (ElementToolbar, ConnectorToolbar, frame's
+  // `.del`), so undo grouping and selection-clearing can't drift apart
+  // between call sites the way duplicated delete logic invites.
+  const deleteSelection = useCallback(
+    (sel: Selection) => {
+      if (!sel) return;
+      const containers: Record<ObjKind, NoteKind> = {
+        note: board.notes,
+        shape: board.shapes,
+        text: board.texts,
+        frame: board.frames,
+        arrow: board.arrows,
+      };
+      deleteObj(board.doc, containers[sel.kind], sel.id);
+      setSelection(null);
+    },
+    [board],
+  );
+
   const bodyRefs = useRef<Record<string, HTMLElement | null>>({});
   const registerBody = useCallback((id: string, el: HTMLElement | null) => {
     bodyRefs.current[id] = el;
@@ -960,18 +1181,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
       if (active && (active.isContentEditable || active.tagName === "INPUT")) return;
 
       if (e.key === "Delete" || e.key === "Backspace") {
-        setSelection((sel) => {
-          if (!sel) return sel;
-          const containers: Record<ObjKind, NoteKind> = {
-            note: board.notes,
-            shape: board.shapes,
-            text: board.texts,
-            frame: board.frames,
-            arrow: board.arrows,
-          };
-          deleteObj(board.doc, containers[sel.kind], sel.id);
-          return null;
-        });
+        deleteSelection(selection);
         return;
       }
       if (e.key === "Escape") {
@@ -987,7 +1197,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [board]);
+  }, [board, selection, deleteSelection]);
 
   const viewportClass = [
     styles.viewport,
@@ -1024,6 +1234,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
               selected={selection?.kind === "arrow" && selection.id === id}
               onSelect={setSelection}
               shapesById={shapesById}
+              onDelete={deleteSelection}
             />
           ))}
           {attractTarget &&
@@ -1059,6 +1270,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
             allShapes={shapes}
             allTexts={texts}
             allArrows={arrows}
+            onDelete={deleteSelection}
           />
         ))}
 
@@ -1074,6 +1286,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
             onSelect={setSelection}
             registerBody={registerBody}
             onAnchorPointerDown={onAnchorPointerDown}
+            onDelete={deleteSelection}
           />
         ))}
 
@@ -1088,6 +1301,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
             selected={selection?.kind === "text" && selection.id === id}
             onSelect={setSelection}
             registerBody={registerBody}
+            onDelete={deleteSelection}
           />
         ))}
 
@@ -1102,6 +1316,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
             selected={selection?.kind === "note" && selection.id === id}
             onSelect={setSelection}
             registerBody={registerBody}
+            onDelete={deleteSelection}
           />
         ))}
 
@@ -1313,7 +1528,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
 //    bottom: 0` inside it (`.connectorToolbar` in Canvas.module.css) plus
 //    `centeredToolbarStyle()`'s `translateX(-50%) scale(1/zoom)`, is
 //    ordinary CSS that every engine agrees on.
-function ConnectorToolbar({
+export function ConnectorToolbar({
   x,
   y,
   zoom,
@@ -1322,6 +1537,7 @@ function ConnectorToolbar({
   headStart,
   headEnd,
   onChange,
+  onDelete,
 }: {
   x: number;
   y: number;
@@ -1331,6 +1547,7 @@ function ConnectorToolbar({
   headStart: ArrowHead;
   headEnd: ArrowHead;
   onChange: (patch: Partial<ArrowData>) => void;
+  onDelete?: () => void;
 }) {
   const boxWidth = screenPxToWorld(CONNECTOR_TOOLBAR_WIDTH_PX, zoom);
   const boxHeight = screenPxToWorld(CONNECTOR_TOOLBAR_HEIGHT_PX, zoom);
@@ -1398,6 +1615,22 @@ function ConnectorToolbar({
             </select>
           </div>
         </div>
+        {onDelete && (
+          <div className={styles.ctDeleteGroup}>
+            <button className={styles.deleteBtn} title="Delete connector" onClick={onDelete}>
+              <svg width={15} height={15} viewBox="0 0 24 24">
+                <path
+                  d="M5 6h14M9 6V4h6v2M7 6l1 14h8l1-14"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+          </div>
+        )}
       </div>
     </foreignObject>
   );
@@ -1412,6 +1645,7 @@ function ArrowItem({
   selected,
   onSelect,
   shapesById,
+  onDelete,
 }: {
   board: BoardDoc;
   id: string;
@@ -1421,6 +1655,7 @@ function ArrowItem({
   selected: boolean;
   onSelect: (s: Selection) => void;
   shapesById: Map<string, ShapeData>;
+  onDelete: (sel: Selection) => void;
 }) {
   type DragMode = "move" | "p1" | "p2" | "curve";
   const dragRef = useRef<{
@@ -1607,6 +1842,7 @@ function ArrowItem({
             headStart={headStart}
             headEnd={headEnd}
             onChange={(patch) => updateFields(board.doc, board.arrows, id, patch)}
+            onDelete={() => onDelete({ kind: "arrow", id })}
           />
         </>
       )}
@@ -1647,6 +1883,7 @@ function NoteItem({
   selected,
   onSelect,
   registerBody,
+  onDelete,
 }: {
   board: BoardDoc;
   id: string;
@@ -1656,6 +1893,7 @@ function NoteItem({
   selected: boolean;
   onSelect: (s: Selection) => void;
   registerBody: (id: string, el: HTMLElement | null) => void;
+  onDelete: (sel: Selection) => void;
 }) {
   const bodyRef = useRef<HTMLElement | null>(null);
   const drag = useSimpleDrag(board, board.notes, "note", id, data.x, data.y, view, tool, onSelect, bodyRef);
@@ -1674,10 +1912,16 @@ function NoteItem({
             bodyRef.current = el;
           }}
           className={styles.noteBody}
-          style={{ fontSize, fontFamily: FONT_STACK[data.fontFamily ?? "ui"], textAlign: data.textAlign ?? "left" }}
+          style={{
+            fontSize,
+            fontFamily: FONT_STACK[data.fontFamily ?? "ui"],
+            textAlign: data.textAlign ?? "left",
+            ...bodyStyleFields(data, "fixed"),
+          }}
           contentEditable
           suppressContentEditableWarning
           onBlur={(e) => updateFields(board.doc, board.notes, id, { body: e.currentTarget.textContent ?? "" })}
+          onKeyDown={(e) => handleStyleKeyDown(e, data, (patch) => updateFields(board.doc, board.notes, id, patch))}
         >
           {data.body}
         </div>
@@ -1686,14 +1930,21 @@ function NoteItem({
         </div>
       </div>
       {selected && (
-        <FontToolbar
+        <ElementToolbar
           x={data.x}
           y={data.y}
           zoom={view.s}
           fontSize={fontSize}
           fontFamily={data.fontFamily ?? "ui"}
           textAlign={data.textAlign ?? "left"}
+          kind="note"
+          color={data.color}
+          bold={data.bold}
+          italic={data.italic}
+          underline={data.underline}
+          textColor={data.textColor}
           onChange={(patch) => updateFields(board.doc, board.notes, id, patch)}
+          onDelete={() => onDelete({ kind: "note", id })}
         />
       )}
     </>
@@ -1712,6 +1963,7 @@ function ShapeItem({
   onSelect,
   registerBody,
   onAnchorPointerDown,
+  onDelete,
 }: {
   board: BoardDoc;
   id: string;
@@ -1722,25 +1974,35 @@ function ShapeItem({
   onSelect: (s: Selection) => void;
   registerBody: (id: string, el: HTMLElement | null) => void;
   onAnchorPointerDown: (shapeId: string, side: Side, x: number, y: number, clientX: number, clientY: number) => void;
+  onDelete: (sel: Selection) => void;
 }) {
   const bodyRef = useRef<HTMLElement | null>(null);
   const drag = useSimpleDrag(board, board.shapes, "shape", id, data.x, data.y, view, tool, onSelect, bodyRef);
   const c = NOTE_COLORS[data.color] ?? NOTE_COLORS[0];
   const fontSize = data.fontSize ?? 14;
+  const strokeWidth = data.strokeWidth ?? 2.5;
+  const filled = data.filled !== false;
   const [hoverSide, setHoverSide] = useState<Side | null>(null);
 
   // Auto-grow: whenever the (unrotated) text content needs more height than
   // the shape currently has, grow the shape to fit. Only grows — a manual
   // resize that leaves room for the text is left alone, matching Miro.
+  // `strokeWidthRef` folds the border into the needed-height calc (F3: the
+  // border is now user-adjustable up to 6.5px, not a fixed 2.5px) so a
+  // thick border narrowing the content box can't create a grow loop.
   const hRef = useRef(data.h);
+  const strokeWidthRef = useRef(strokeWidth);
   useEffect(() => {
     hRef.current = data.h;
   }, [data.h]);
   useEffect(() => {
+    strokeWidthRef.current = strokeWidth;
+  }, [strokeWidth]);
+  useEffect(() => {
     const el = bodyRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => {
-      const needed = el.scrollHeight + SHAPE_PAD_Y;
+      const needed = el.scrollHeight + SHAPE_PAD_Y + strokeWidthRef.current * 2;
       if (needed > hRef.current) updateFields(board.doc, board.shapes, id, { h: needed });
     });
     ro.observe(el);
@@ -1780,7 +2042,7 @@ function ShapeItem({
         className={`${styles.shape} ${styles[data.kind]} ${selected ? styles.selected : ""}`}
         // F2: `--zoom-inv` feeds the .anchor/.a-* hover-dot counter-scale in
         // Canvas.module.css, so they stay a constant, touch-sized 14px on
-        // screen instead of shrinking with zoom.
+        // screen instead of shrinking with zoom. F3 adds borderWidth/fill.
         style={
           {
             left: data.x,
@@ -1788,7 +2050,8 @@ function ShapeItem({
             width: data.w,
             height: data.h,
             borderColor: c.bg,
-            background: `${c.bg}2e`,
+            borderWidth: strokeWidth,
+            background: filled ? `${c.bg}2e` : "transparent",
             "--zoom-inv": zoomInv(view.s),
           } as ZoomVarStyle
         }
@@ -1800,10 +2063,16 @@ function ShapeItem({
             bodyRef.current = el;
           }}
           className={styles.shapeBody}
-          style={{ fontSize, fontFamily: FONT_STACK[data.fontFamily ?? "ui"], textAlign: data.textAlign ?? "center" }}
+          style={{
+            fontSize,
+            fontFamily: FONT_STACK[data.fontFamily ?? "ui"],
+            textAlign: data.textAlign ?? "center",
+            ...bodyStyleFields(data),
+          }}
           contentEditable
           suppressContentEditableWarning
           onBlur={(e) => updateFields(board.doc, board.shapes, id, { body: e.currentTarget.textContent ?? "" })}
+          onKeyDown={(e) => handleStyleKeyDown(e, data, (patch) => updateFields(board.doc, board.shapes, id, patch))}
         >
           {data.body}
         </div>
@@ -1838,14 +2107,23 @@ function ShapeItem({
             minH={30}
             onResize={(n) => updateFields(board.doc, board.shapes, id, n)}
           />
-          <FontToolbar
+          <ElementToolbar
             x={data.x}
             y={data.y}
             zoom={view.s}
             fontSize={fontSize}
             fontFamily={data.fontFamily ?? "ui"}
             textAlign={data.textAlign ?? "center"}
+            kind="shape"
+            color={data.color}
+            strokeWidth={strokeWidth}
+            filled={filled}
+            bold={data.bold}
+            italic={data.italic}
+            underline={data.underline}
+            textColor={data.textColor}
             onChange={(patch) => updateFields(board.doc, board.shapes, id, patch)}
+            onDelete={() => onDelete({ kind: "shape", id })}
           />
         </>
       )}
@@ -1862,6 +2140,7 @@ function TextItem({
   selected,
   onSelect,
   registerBody,
+  onDelete,
 }: {
   board: BoardDoc;
   id: string;
@@ -1871,6 +2150,7 @@ function TextItem({
   selected: boolean;
   onSelect: (s: Selection) => void;
   registerBody: (id: string, el: HTMLElement | null) => void;
+  onDelete: (sel: Selection) => void;
 }) {
   const bodyRef = useRef<HTMLElement | null>(null);
   const drag = useSimpleDrag(board, board.texts, "text", id, data.x, data.y, view, tool, onSelect, bodyRef);
@@ -1884,23 +2164,35 @@ function TextItem({
             bodyRef.current = el;
           }}
           className={styles.textBody}
-          style={{ fontSize, fontFamily: FONT_STACK[data.fontFamily ?? "ui"], textAlign: data.textAlign ?? "left" }}
+          style={{
+            fontSize,
+            fontFamily: FONT_STACK[data.fontFamily ?? "ui"],
+            textAlign: data.textAlign ?? "left",
+            ...bodyStyleFields(data),
+          }}
           contentEditable
           suppressContentEditableWarning
           onBlur={(e) => updateFields(board.doc, board.texts, id, { body: e.currentTarget.textContent ?? "" })}
+          onKeyDown={(e) => handleStyleKeyDown(e, data, (patch) => updateFields(board.doc, board.texts, id, patch))}
         >
           {data.body}
         </div>
       </div>
       {selected && (
-        <FontToolbar
+        <ElementToolbar
           x={data.x}
           y={data.y}
           zoom={view.s}
           fontSize={fontSize}
           fontFamily={data.fontFamily ?? "ui"}
           textAlign={data.textAlign ?? "left"}
+          kind="text"
+          bold={data.bold}
+          italic={data.italic}
+          underline={data.underline}
+          textColor={data.textColor}
           onChange={(patch) => updateFields(board.doc, board.texts, id, patch)}
+          onDelete={() => onDelete({ kind: "text", id })}
         />
       )}
     </>
@@ -1945,6 +2237,7 @@ export function FrameItem({
   allShapes,
   allTexts,
   allArrows,
+  onDelete,
 }: {
   board: BoardDoc;
   id: string;
@@ -1957,6 +2250,7 @@ export function FrameItem({
   allShapes: { id: string; data: ShapeData }[];
   allTexts: { id: string; data: TextData }[];
   allArrows: { id: string; data: ArrowData }[];
+  onDelete: (sel: Selection) => void;
 }) {
   const startRef = useRef<{
     mx: number;
@@ -2106,7 +2400,10 @@ export function FrameItem({
           </div>
         </div>
         <div style={delAnchorStyle}>
-          <DeleteButton zoom={view.s} onDelete={() => deleteObj(board.doc, board.frames, id)} />
+          {/* F4: routed through Canvas's single deleteSelection path, not a
+              local deleteObj call, so undo grouping and selection clearing
+              stay identical to the keyboard and toolbar delete. */}
+          <DeleteButton zoom={view.s} onDelete={() => onDelete({ kind: "frame", id })} />
         </div>
       </div>
       {selected && (
