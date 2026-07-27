@@ -145,16 +145,27 @@ const QUICK_CREATE_MAX_STEPS = 20;
 // pointerdown+up is a quick-create click; over it, it's a connector drag.
 const ANCHOR_CLICK_PX = 4;
 
+// Which kinds share this toolbar and which of its groups apply to each —
+// note/shape/text all get font controls; color is note+shape (F3); shape
+// alone additionally gets border thickness + fill toggle (F3).
+type ElementKind = "note" | "shape" | "text";
+
 // Shared floating control shown above a selected note/shape/text: font size
 // +/- and a sans/mono family toggle (the only two families DESIGN.md defines
 // — no serif, to keep the "engineering instrument" look, not "generic AI tool"),
-// plus a left/center/right text-align group (Epic D).
-function FontToolbar({
+// a left/center/right text-align group (Epic D), and (F3) per-kind color /
+// border-thickness / fill-toggle groups. Was `FontToolbar`; renamed +
+// exported once it grew beyond font controls.
+export function ElementToolbar({
   x,
   y,
   fontSize,
   fontFamily,
   textAlign,
+  kind,
+  color,
+  strokeWidth,
+  filled,
   onChange,
 }: {
   x: number;
@@ -162,12 +173,22 @@ function FontToolbar({
   fontSize: number;
   fontFamily: import("@/lib/board-doc").FontFamily;
   textAlign: TextAlign;
+  kind: ElementKind;
+  color?: number;
+  strokeWidth?: number;
+  filled?: boolean;
   onChange: (patch: {
     fontSize?: number;
     fontFamily?: import("@/lib/board-doc").FontFamily;
     textAlign?: TextAlign;
+    color?: number;
+    strokeWidth?: number;
+    filled?: boolean;
   }) => void;
 }) {
+  const showColor = kind === "note" || kind === "shape";
+  const showShapeControls = kind === "shape";
+  const isFilled = filled !== false;
   return (
     <div className={styles.fontToolbar} style={{ left: x, top: y - 32 }} onPointerDown={(e) => e.stopPropagation()}>
       <button onClick={() => onChange({ fontSize: Math.max(FONT_SIZE_MIN, fontSize - FONT_SIZE_STEP) })}>A−</button>
@@ -201,6 +222,60 @@ function FontToolbar({
           </svg>
         </button>
       ))}
+      {showColor && (
+        <>
+          <div className={styles.ftSep} />
+          <div className={styles.ctGroup}>
+            {NOTE_COLORS.map((c, i) => (
+              <button
+                key={c.tag}
+                className={`${styles.swatchBtn} ${color === i ? styles.swatchActive : ""}`}
+                style={{ background: c.bg }}
+                title={`Color ${c.tag}`}
+                onClick={() => onChange({ color: i })}
+              />
+            ))}
+          </div>
+        </>
+      )}
+      {showShapeControls && (
+        <>
+          <div className={styles.ftSep} />
+          <div className={styles.ctGroup}>
+            {ARROW_STROKE_PRESETS.map((w) => (
+              <button
+                key={w}
+                className={strokeWidth === w ? styles.ftActive : ""}
+                title={`${w}px`}
+                onClick={() => onChange({ strokeWidth: w })}
+              >
+                <svg width={18} height={16} viewBox="0 0 20 16">
+                  <line x1={2} y1={8} x2={18} y2={8} stroke="currentColor" strokeWidth={w} strokeLinecap="round" />
+                </svg>
+              </button>
+            ))}
+          </div>
+          <div className={styles.ftSep} />
+          <button
+            className={!isFilled ? styles.ftActive : ""}
+            title={isFilled ? "Outline only" : "Fill"}
+            onClick={() => onChange({ filled: !isFilled })}
+          >
+            <svg width={15} height={15} viewBox="0 0 24 24">
+              <rect
+                x={4}
+                y={4}
+                width={16}
+                height={16}
+                rx={3}
+                fill={isFilled ? "currentColor" : "none"}
+                stroke="currentColor"
+                strokeWidth={2}
+              />
+            </svg>
+          </button>
+        </>
+      )}
     </div>
   );
 }
@@ -1576,12 +1651,14 @@ function NoteItem({
         </div>
       </div>
       {selected && (
-        <FontToolbar
+        <ElementToolbar
           x={data.x}
           y={data.y}
           fontSize={fontSize}
           fontFamily={data.fontFamily ?? "ui"}
           textAlign={data.textAlign ?? "left"}
+          kind="note"
+          color={data.color}
           onChange={(patch) => updateFields(board.doc, board.notes, id, patch)}
         />
       )}
@@ -1616,20 +1693,29 @@ function ShapeItem({
   const drag = useSimpleDrag(board, board.shapes, "shape", id, data.x, data.y, view, tool, onSelect, bodyRef);
   const c = NOTE_COLORS[data.color] ?? NOTE_COLORS[0];
   const fontSize = data.fontSize ?? 14;
+  const strokeWidth = data.strokeWidth ?? 2.5;
+  const filled = data.filled !== false;
   const [hoverSide, setHoverSide] = useState<Side | null>(null);
 
   // Auto-grow: whenever the (unrotated) text content needs more height than
   // the shape currently has, grow the shape to fit. Only grows — a manual
   // resize that leaves room for the text is left alone, matching Miro.
+  // `strokeWidthRef` folds the border into the needed-height calc (F3: the
+  // border is now user-adjustable up to 6.5px, not a fixed 2.5px) so a
+  // thick border narrowing the content box can't create a grow loop.
   const hRef = useRef(data.h);
+  const strokeWidthRef = useRef(strokeWidth);
   useEffect(() => {
     hRef.current = data.h;
   }, [data.h]);
   useEffect(() => {
+    strokeWidthRef.current = strokeWidth;
+  }, [strokeWidth]);
+  useEffect(() => {
     const el = bodyRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => {
-      const needed = el.scrollHeight + SHAPE_PAD_Y;
+      const needed = el.scrollHeight + SHAPE_PAD_Y + strokeWidthRef.current * 2;
       if (needed > hRef.current) updateFields(board.doc, board.shapes, id, { h: needed });
     });
     ro.observe(el);
@@ -1667,7 +1753,15 @@ function ShapeItem({
       )}
       <div
         className={`${styles.shape} ${styles[data.kind]} ${selected ? styles.selected : ""}`}
-        style={{ left: data.x, top: data.y, width: data.w, height: data.h, borderColor: c.bg, background: `${c.bg}2e` }}
+        style={{
+          left: data.x,
+          top: data.y,
+          width: data.w,
+          height: data.h,
+          borderColor: c.bg,
+          borderWidth: strokeWidth,
+          background: filled ? `${c.bg}2e` : "transparent",
+        }}
         {...drag}
       >
         <div
@@ -1714,12 +1808,16 @@ function ShapeItem({
             minH={30}
             onResize={(n) => updateFields(board.doc, board.shapes, id, n)}
           />
-          <FontToolbar
+          <ElementToolbar
             x={data.x}
             y={data.y}
             fontSize={fontSize}
             fontFamily={data.fontFamily ?? "ui"}
             textAlign={data.textAlign ?? "center"}
+            kind="shape"
+            color={data.color}
+            strokeWidth={strokeWidth}
+            filled={filled}
             onChange={(patch) => updateFields(board.doc, board.shapes, id, patch)}
           />
         </>
@@ -1768,12 +1866,13 @@ function TextItem({
         </div>
       </div>
       {selected && (
-        <FontToolbar
+        <ElementToolbar
           x={data.x}
           y={data.y}
           fontSize={fontSize}
           fontFamily={data.fontFamily ?? "ui"}
           textAlign={data.textAlign ?? "left"}
+          kind="text"
           onChange={(patch) => updateFields(board.doc, board.texts, id, patch)}
         />
       )}

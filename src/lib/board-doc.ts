@@ -55,6 +55,12 @@ export interface ShapeData {
   fontSize?: number;
   fontFamily?: FontFamily;
   textAlign?: TextAlign;
+  // F3 (shape styling): border width in world units. Undefined renders as
+  // today's hardcoded `.shape { border: 2.5px solid }`.
+  strokeWidth?: number;
+  // F3: undefined/true = today's `${c.bg}2e` tinted background; false = a
+  // transparent, outline-only shape.
+  filled?: boolean;
 }
 export interface TextData {
   x: number;
