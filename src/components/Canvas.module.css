@@ -60,10 +60,13 @@
   position: absolute;
   left: 0;
   bottom: 0;
+  /* Deliberately NOT a flex container: this element is contentEditable, and
+     inside a flex container its text nodes become anonymous flex items,
+     which makes caret placement and the empty-label state unreliable. Block
+     layout with line-height carrying the vertical centering gets the same
+     30px min touch height (16 line + 14 padding) without that risk. */
   min-height: 30px;
-  display: flex;
-  align-items: center;
-  font: 600 14px/1 var(--font-mono);
+  font: 600 14px/16px var(--font-mono);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--ink-soft);
