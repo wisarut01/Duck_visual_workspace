@@ -218,27 +218,57 @@
    Canvas.tsx) — `bottom: 0` pins this element's own bottom edge (i.e. the
    counter-scale's `transform-origin: 50% 100%` point) exactly to that
    anchor, independent of this element's actual rendered height. */
+/* Rewritten from one long flex-wrapped row (browser decided where each
+   control group broke to a new line, so it reflowed differently depending
+   on which optional groups — color/shape/text-color — were present, and
+   the delete button routinely ended up alone on a dangling last row) to
+   explicit rows: one `.ftRow` per logical group (sizing+align, fill color,
+   shape stroke/fill, B/I/U+text-color+delete), each a fixed line. */
 .fontToolbar {
   position: absolute;
   left: 0;
   bottom: 0;
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 3px;
+  flex-direction: column;
+  gap: 5px;
   background: var(--panel);
   border: 1px solid var(--panel-border);
   border-radius: 7px;
-  padding: 4px 8px;
+  padding: 5px 8px;
   font: 600 13px/1 var(--font-mono);
   color: var(--ink-soft);
   z-index: 5;
   box-shadow: var(--panel-shadow);
-  /* F3: the toolbar grew past a phone's width once color/thickness/fill/
-     B-I-U/text-color/delete groups landed, so it wraps to a second row
-     instead. No `white-space: nowrap` here — that would defeat the wrap. */
-  max-width: 420px;
+  /* Widest row (sizing/family/align, or B-I-U + text-color + delete) needs
+     ~430px of content; anything tighter clips controls off the edge with
+     no visible scrollbar to reach them (see .ftRow below) instead of
+     wrapping cleanly. */
+  max-width: 460px;
 }
+.ftRow {
+  display: flex;
+  /* nowrap deliberately: each row is already one logical group (sizing,
+     fill color, shape stroke/fill, B-I-U+text-color+delete) — wrapping
+     *within* a row is what produced the old jumbled layout (a flex-wrap
+     container's auto-width sizing shrinks to its widest single item once
+     wrap is allowed, not the row's full content, so every other row's
+     content overflowed and broke apart unpredictably). At the 460px cap
+     above every row fits on desktop; overflow-x only kicks in below the
+     720px phone breakpoint (see @media block), where it's a deliberate
+     "swipe to see more" affordance, not a silent control-eating clip.
+     `overflow: visible` is the default and stays that way at desktop
+     widths. */
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 3px;
+}
+.ftRow:not(:last-child) {
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--hair);
+}
+/* Delete sits at the end of the last row, pushed flush right instead of
+   dangling alone on its own line with a big gap in front of it. */
+.ftRow .ctDeleteGroup { margin-left: auto; }
 .fontToolbar button {
   min-width: 36px;
   height: 32px;
@@ -446,6 +476,13 @@
 .tool:hover { background: var(--hair); color: var(--ink); }
 .tool.active { background: var(--accent-soft); color: var(--accent); }
 .tool svg { width: 20px; height: 20px; }
+/* F1a's image tool when signed out: it's still clickable (surfaces a
+   "sign in" message rather than being truly disabled), but looked
+   identical to every enabled tool, so a guest had no visual hint it
+   needed an account until they'd already clicked it and seen nothing
+   happen. */
+.toolDimmed { color: var(--ink-faint); }
+.toolDimmed:hover { color: var(--ink-soft); }
 .sep { flex: 0 0 auto; width: 1px; height: 26px; background: var(--panel-border); margin: 0 4px; }
 .swatches { display: flex; gap: 5px; padding: 0 4px; flex: 0 0 auto; }
 .sw {
@@ -513,6 +550,8 @@
   .hint { display: none; }
   .toolbar { bottom: 10px; }
   .zoom { right: 10px; bottom: 60px; }
+  .fontToolbar { max-width: calc(100vw - 40px); }
+  .ftRow { overflow-x: auto; }
 }
 
 /* ---- remote cursor (epic 4 — presence) ---- */

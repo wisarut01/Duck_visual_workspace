@@ -340,40 +340,43 @@ export function ElementToolbar({
   return (
     <div style={anchorStyle}>
       <div className={styles.fontToolbar} style={toolbarStyle(zoom)} onPointerDown={(e) => e.stopPropagation()}>
-        <button onClick={() => onChange({ fontSize: Math.max(FONT_SIZE_MIN, fontSize - FONT_SIZE_STEP) })}>A−</button>
-        <span>{fontSize}</span>
-        <button onClick={() => onChange({ fontSize: Math.min(FONT_SIZE_MAX, fontSize + FONT_SIZE_STEP) })}>A+</button>
-        <div className={styles.ftSep} />
-        <button className={fontFamily === "ui" ? styles.ftActive : ""} onClick={() => onChange({ fontFamily: "ui" })}>
-          Sans
-        </button>
-        <button className={fontFamily === "mono" ? styles.ftActive : ""} onClick={() => onChange({ fontFamily: "mono" })}>
-          Mono
-        </button>
-        <div className={styles.ftSep} />
-        {(["left", "center", "right"] as TextAlign[]).map((a) => (
-          <button
-            key={a}
-            className={textAlign === a ? styles.ftActive : ""}
-            title={`Align ${a}`}
-            onClick={() => onChange({ textAlign: a })}
-          >
-            <svg width={13} height={13} viewBox="0 0 24 24">
-              {a === "left" && (
-                <path d="M4 6h16M4 12h10M4 18h14" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" />
-              )}
-              {a === "center" && (
-                <path d="M4 6h16M8 12h8M5 18h14" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" />
-              )}
-              {a === "right" && (
-                <path d="M4 6h16M10 12h10M6 18h14" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" />
-              )}
-            </svg>
+        <div className={styles.ftRow}>
+          <button onClick={() => onChange({ fontSize: Math.max(FONT_SIZE_MIN, fontSize - FONT_SIZE_STEP) })}>A−</button>
+          <span>{fontSize}</span>
+          <button onClick={() => onChange({ fontSize: Math.min(FONT_SIZE_MAX, fontSize + FONT_SIZE_STEP) })}>A+</button>
+          <div className={styles.ftSep} />
+          <button className={fontFamily === "ui" ? styles.ftActive : ""} onClick={() => onChange({ fontFamily: "ui" })}>
+            Sans
           </button>
-        ))}
+          <button className={fontFamily === "mono" ? styles.ftActive : ""} onClick={() => onChange({ fontFamily: "mono" })}>
+            Mono
+          </button>
+          <div className={styles.ftSep} />
+          {(["left", "center", "right"] as TextAlign[]).map((a) => (
+            <button
+              key={a}
+              className={textAlign === a ? styles.ftActive : ""}
+              title={`Align ${a}`}
+              onClick={() => onChange({ textAlign: a })}
+            >
+              <svg width={13} height={13} viewBox="0 0 24 24">
+                {a === "left" && (
+                  <path d="M4 6h16M4 12h10M4 18h14" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" />
+                )}
+                {a === "center" && (
+                  <path d="M4 6h16M8 12h8M5 18h14" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" />
+                )}
+                {a === "right" && (
+                  <path d="M4 6h16M10 12h10M6 18h14" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" />
+                )}
+              </svg>
+            </button>
+          ))}
+        </div>
+
         {showColor && (
-          <>
-            <div className={styles.ftSep} />
+          <div className={styles.ftRow}>
+            <span className={styles.ctLabel}>Fill</span>
             <div className={styles.ctGroup}>
               {NOTE_COLORS.map((c, i) => (
                 <button
@@ -385,11 +388,11 @@ export function ElementToolbar({
                 />
               ))}
             </div>
-          </>
+          </div>
         )}
+
         {showShapeControls && (
-          <>
-            <div className={styles.ftSep} />
+          <div className={styles.ftRow}>
             <div className={styles.ctGroup}>
               {ARROW_STROKE_PRESETS.map((w) => (
                 <button
@@ -423,70 +426,72 @@ export function ElementToolbar({
                 />
               </svg>
             </button>
-          </>
-        )}
-        <div className={styles.ftSep} />
-        <div className={styles.ctGroup}>
-          <button
-            className={bold ? styles.ftActive : ""}
-            title="Bold"
-            style={{ fontWeight: 700 }}
-            onClick={() => onChange({ bold: !bold })}
-          >
-            B
-          </button>
-          <button
-            className={italic ? styles.ftActive : ""}
-            title="Italic"
-            style={{ fontStyle: "italic" }}
-            onClick={() => onChange({ italic: !italic })}
-          >
-            I
-          </button>
-          <button
-            className={underline ? styles.ftActive : ""}
-            title="Underline"
-            style={{ textDecoration: "underline" }}
-            onClick={() => onChange({ underline: !underline })}
-          >
-            U
-          </button>
-        </div>
-        <div className={styles.ftSep} />
-        <div className={styles.ctGroup}>
-          <button
-            className={`${styles.swatchBtn} ${styles.swatchInk} ${textColor === undefined ? styles.swatchActive : ""}`}
-            title="Auto text color (theme default)"
-            onClick={() => onChange({ textColor: undefined })}
-          />
-          {TEXT_COLORS.map((c, i) => (
-            <button
-              key={c.name}
-              className={`${styles.swatchBtn} ${textColor === i ? styles.swatchActive : ""}`}
-              // Swatch shows the color as it will actually render in the
-              // active theme (see textColorVar / --text-N in globals.css).
-              style={{ background: textColorVar(i, "themed") }}
-              title={`Text color ${c.name}`}
-              onClick={() => onChange({ textColor: i })}
-            />
-          ))}
-        </div>
-        {onDelete && (
-          <div className={styles.ctDeleteGroup}>
-            <button className={styles.deleteBtn} title="Delete" onClick={onDelete}>
-              <svg width={15} height={15} viewBox="0 0 24 24">
-                <path
-                  d="M5 6h14M9 6V4h6v2M7 6l1 14h8l1-14"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </button>
           </div>
         )}
+
+        <div className={styles.ftRow}>
+          <div className={styles.ctGroup}>
+            <button
+              className={bold ? styles.ftActive : ""}
+              title="Bold"
+              style={{ fontWeight: 700 }}
+              onClick={() => onChange({ bold: !bold })}
+            >
+              B
+            </button>
+            <button
+              className={italic ? styles.ftActive : ""}
+              title="Italic"
+              style={{ fontStyle: "italic" }}
+              onClick={() => onChange({ italic: !italic })}
+            >
+              I
+            </button>
+            <button
+              className={underline ? styles.ftActive : ""}
+              title="Underline"
+              style={{ textDecoration: "underline" }}
+              onClick={() => onChange({ underline: !underline })}
+            >
+              U
+            </button>
+          </div>
+          <div className={styles.ftSep} />
+          <div className={styles.ctGroup}>
+            <button
+              className={`${styles.swatchBtn} ${styles.swatchInk} ${textColor === undefined ? styles.swatchActive : ""}`}
+              title="Auto text color (theme default)"
+              onClick={() => onChange({ textColor: undefined })}
+            />
+            {TEXT_COLORS.map((c, i) => (
+              <button
+                key={c.name}
+                className={`${styles.swatchBtn} ${textColor === i ? styles.swatchActive : ""}`}
+                // Swatch shows the color as it will actually render in the
+                // active theme (see textColorVar / --text-N in globals.css).
+                style={{ background: textColorVar(i, "themed") }}
+                title={`Text color ${c.name}`}
+                onClick={() => onChange({ textColor: i })}
+              />
+            ))}
+          </div>
+          {onDelete && (
+            <div className={styles.ctDeleteGroup}>
+              <button className={styles.deleteBtn} title="Delete" onClick={onDelete}>
+                <svg width={15} height={15} viewBox="0 0 24 24">
+                  <path
+                    d="M5 6h14M9 6V4h6v2M7 6l1 14h8l1-14"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -1045,7 +1050,16 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
   // tool switch, same shape as `justCreated`'s consume-and-clear effect below.
   useEffect(() => {
     if (tool === "image") {
-      if (isSignedIn) fileInputRef.current?.click();
+      if (isSignedIn) {
+        fileInputRef.current?.click();
+      } else {
+        // Previously silent: the button's only explanation was its hover
+        // title, so a guest clicking it saw nothing happen at all and had
+        // no way to tell "locked" apart from "broken". A one-shot alert is
+        // the same pattern onImageFileSelected already uses for upload
+        // failures below.
+        window.alert("Sign in to add images — use “My boards” in the top-left corner.");
+      }
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setTool("select");
     }
@@ -1391,6 +1405,29 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
     });
   }
 
+  // React attaches the JSX `onWheel` handler as a passive listener on the
+  // root, so calling `e.preventDefault()` inside it throws "Unable to
+  // preventDefault inside passive event listener invocation" instead of
+  // actually blocking the page scroll/zoom. Attach natively with
+  // `{ passive: false }` instead. zoomAtRef sidesteps re-attaching the
+  // listener (and its addEventListener/removeEventListener churn) every
+  // render just because zoomAt is a fresh closure each time.
+  const zoomAtRef = useRef(zoomAt);
+  useEffect(() => {
+    zoomAtRef.current = zoomAt;
+  });
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    function onWheel(e: WheelEvent) {
+      e.preventDefault();
+      zoomAtRef.current(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0015));
+    }
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
   // ---- keyboard ----
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -1447,15 +1484,12 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
 
   return (
     <div
+      ref={viewportRef}
       className={viewportClass}
       onPointerDown={onViewportPointerDown}
       onPointerMove={onViewportPointerMove}
       onPointerUp={onViewportPointerUp}
       onPointerLeave={() => providerRef.current?.awareness.setLocalStateField("cursor", null)}
-      onWheel={(e) => {
-        e.preventDefault();
-        zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0015));
-      }}
     >
       <div className={styles.world} style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.s})` }}>
         <svg className={styles.svgLayer}>
@@ -1507,6 +1541,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
             allShapes={shapes}
             allTexts={texts}
             allArrows={arrows}
+            allImages={images}
             onDelete={deleteSelection}
           />
         ))}
@@ -1657,6 +1692,13 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
                 flexDirection: "column",
                 gap: 2,
                 zIndex: 1100,
+                // .topbar sets `pointer-events: none` (so clicks pass through its
+                // empty chrome to the canvas below) and only re-enables it on
+                // specific classed elements like .shareBtn/.tbGroup — this menu
+                // is a plain unclassed div, so without this it silently inherits
+                // `none` and every click on "Whole board"/"This frame"/"Select
+                // area" falls through to the canvas untouched.
+                pointerEvents: "auto",
               }}
             >
               <button onClick={exportWholeBoard} style={EXPORT_MENU_ITEM_STYLE}>
@@ -1775,6 +1817,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
           current={tool}
           onClick={setTool}
           title={isSignedIn ? "Insert image (I)" : "Sign in to add images"}
+          dimmed={!isSignedIn}
         >
           <rect x={4} y={4} width={16} height={16} rx={2} fill="none" stroke="currentColor" strokeWidth={2} />
           <circle cx={9} cy={9.5} r={1.6} fill="currentColor" />
@@ -2186,17 +2229,19 @@ function ToolButton({
   current,
   onClick,
   title,
+  dimmed,
   children,
 }: {
   tool: Tool;
   current: Tool;
   onClick: (t: Tool) => void;
   title: string;
+  dimmed?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <button
-      className={`${styles.tool} ${current === tool ? styles.active : ""}`}
+      className={`${styles.tool} ${current === tool ? styles.active : ""} ${dimmed ? styles.toolDimmed : ""}`}
       title={title}
       onClick={() => onClick(tool)}
     >
@@ -2673,6 +2718,7 @@ export function FrameItem({
   allShapes,
   allTexts,
   allArrows,
+  allImages,
   onDelete,
 }: {
   board: BoardDoc;
@@ -2686,6 +2732,7 @@ export function FrameItem({
   allShapes: { id: string; data: ShapeData }[];
   allTexts: { id: string; data: TextData }[];
   allArrows: { id: string; data: ArrowData }[];
+  allImages: { id: string; data: ImageData }[];
   onDelete: (sel: Selection) => void;
 }) {
   const startRef = useRef<{
@@ -2745,6 +2792,10 @@ export function FrameItem({
     }
     for (const { id: tid, data: td } of allTexts) {
       if (inRect(td.x, td.y, rx, ry, rw, rh)) members.push({ container: board.texts, id: tid, x: td.x, y: td.y });
+    }
+    for (const { id: iid, data: idata } of allImages) {
+      if (inRect(idata.x + idata.w / 2, idata.y + idata.h / 2, rx, ry, rw, rh))
+        members.push({ container: board.images, id: iid, x: idata.x, y: idata.y });
     }
     const arrowMembers: { id: string; x1: number; y1: number; x2: number; y2: number }[] = [];
     for (const { id: aid, data: ad } of allArrows) {
