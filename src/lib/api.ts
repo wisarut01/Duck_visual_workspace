@@ -67,3 +67,21 @@ export function removeBoard(id: string) {
     method: "DELETE",
   });
 }
+
+// F1a: image upload. Deliberately bypasses `call()` above — that helper
+// always sets `Content-Type: application/json`, which is wrong for a
+// multipart body (the browser must set its own `Content-Type` with the
+// multipart boundary for a FormData body; setting it manually breaks parsing).
+export interface UploadImageResult {
+  url?: string;
+  width?: number | null;
+  height?: number | null;
+  error?: string;
+}
+export async function uploadImage(file: File): Promise<{ ok: boolean; status: number; data: UploadImageResult }> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const res = await fetch("/api/uploads", { method: "POST", body: formData });
+  const data = (await res.json().catch(() => ({}))) as UploadImageResult;
+  return { ok: res.ok, status: res.status, data };
+}

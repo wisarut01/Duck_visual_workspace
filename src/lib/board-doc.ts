@@ -71,6 +71,21 @@ export interface FrameData {
   h: number;
   label: string;
 }
+// F1a: an uploaded image placed on the board. Only the Supabase Storage
+// public URL is stored in the Y.Doc — never base64 — since the whole doc is
+// snapshotted to Supabase and broadcast to every client on load; embedding
+// image bytes there would bloat that unboundedly. `naturalW`/`naturalH` (the
+// original pixel dimensions) drive aspect-ratio-locked resizing; `w`/`h` are
+// the on-board display size, independent of the natural size.
+export interface ImageData {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  url: string;
+  naturalW: number;
+  naturalH: number;
+}
 export interface ArrowData {
   x1: number;
   y1: number;
@@ -100,6 +115,7 @@ export interface BoardDoc {
   texts: Y.Map<Y.Map<unknown>>;
   frames: Y.Map<Y.Map<unknown>>;
   arrows: Y.Map<Y.Map<unknown>>;
+  images: Y.Map<Y.Map<unknown>>;
   meta: Y.Map<unknown>;
   undoManager: Y.UndoManager;
 }
@@ -117,6 +133,10 @@ export function createBoardDoc(): BoardDoc {
   const texts = doc.getMap<Y.Map<unknown>>("texts");
   const frames = doc.getMap<Y.Map<unknown>>("frames");
   const arrows = doc.getMap<Y.Map<unknown>>("arrows");
+  // F1a: images. Adding a new top-level container is backward-compatible —
+  // an old snapshot that never wrote to "images" just yields an empty map
+  // when read back (Y.Doc.getMap creates it on first access either way).
+  const images = doc.getMap<Y.Map<unknown>>("images");
   // Board-level metadata (currently just the room's display name). Kept out
   // of the undoManager's tracked type list on purpose — renaming the board
   // shouldn't be grouped with, or undoable via the same Ctrl+Z stack as,
@@ -124,10 +144,10 @@ export function createBoardDoc(): BoardDoc {
   const meta = doc.getMap<unknown>("meta");
   // Consecutive transactions within 500ms merge into one undo step —
   // this is what makes a drag (many small commits) undo as a single move.
-  const undoManager = new Y.UndoManager([notes, shapes, texts, frames, arrows], {
+  const undoManager = new Y.UndoManager([notes, shapes, texts, frames, arrows, images], {
     captureTimeout: 500,
   });
-  return { doc, notes, shapes, texts, frames, arrows, meta, undoManager };
+  return { doc, notes, shapes, texts, frames, arrows, images, meta, undoManager };
 }
 
 export function getBoardName(b: BoardDoc): string {
@@ -187,6 +207,21 @@ export function addText(b: BoardDoc, x: number, y: number): string {
 export function addFrame(b: BoardDoc, x: number, y: number, w: number, h: number, label: string): string {
   const id = newId("frame");
   put(b.doc, b.frames, id, { x, y, w, h, label } satisfies FrameData);
+  return id;
+}
+
+export function addImage(
+  b: BoardDoc,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  url: string,
+  naturalW: number,
+  naturalH: number,
+): string {
+  const id = newId("image");
+  put(b.doc, b.images, id, { x, y, w, h, url, naturalW, naturalH } satisfies ImageData);
   return id;
 }
 

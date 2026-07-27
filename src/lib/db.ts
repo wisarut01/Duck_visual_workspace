@@ -109,3 +109,17 @@ export async function deleteBoard(id: string, ownerId: string) {
   const { error } = await supabase.from("boards").delete().eq("id", id).eq("owner_id", ownerId);
   if (error) throw new Error(error.message);
 }
+
+// F1a: image uploads (bucket `board-images`, public read — see
+// server/supabase-schema.sql; must be created manually in the Supabase
+// dashboard/CLI, app code never creates buckets). Only the returned public
+// URL is ever stored in the Y.Doc — see the ImageData comment in
+// board-doc.ts for why (base64-in-the-doc would bloat the snapshot).
+const IMAGE_BUCKET = "board-images";
+
+export async function uploadBoardImage(path: string, bytes: Uint8Array, contentType: string): Promise<string> {
+  const { error } = await supabase.storage.from(IMAGE_BUCKET).upload(path, bytes, { contentType, upsert: false });
+  if (error) throw new Error(error.message);
+  const { data } = supabase.storage.from(IMAGE_BUCKET).getPublicUrl(path);
+  return data.publicUrl;
+}
