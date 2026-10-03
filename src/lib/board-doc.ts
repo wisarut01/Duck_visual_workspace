@@ -284,6 +284,30 @@ export function addTable(b: BoardDoc, x: number, y: number, rows: number, cols: 
   return id;
 }
 
+// A table pre-filled from a grid of strings (a pasted spreadsheet selection),
+// clamped to the table limits. `put` is one transaction, so it's one undo step.
+export function addTableFromGrid(b: BoardDoc, x: number, y: number, grid: string[][]): string {
+  const id = newId("table");
+  const t = emptyTable(grid.length, grid[0]?.length ?? 1);
+  const cells: Record<string, string> = {};
+  for (let r = 0; r < t.rows; r++) {
+    for (let c = 0; c < t.cols; c++) {
+      const text = grid[r]?.[c] ?? "";
+      if (text !== "") cells[cellKey(r, c)] = text;
+    }
+  }
+  put(b.doc, b.tables, id, {
+    x,
+    y,
+    rows: t.rows,
+    cols: t.cols,
+    colWidths: t.colWidths,
+    rowHeights: t.rowHeights,
+    ...cells,
+  });
+  return id;
+}
+
 /** Reads a table's Y.Map into a plain snapshot (cells gathered from `cell:` keys). */
 export function readTableMap(m: Y.Map<unknown>): TableSnapshot {
   const cells: Record<string, string> = {};
