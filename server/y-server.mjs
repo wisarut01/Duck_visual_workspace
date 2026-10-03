@@ -57,8 +57,15 @@ async function saveRoom(roomId, room) {
   return ok;
 }
 
+// Final saves still in flight for rooms whose last client just left. A
+// rejoin must wait for it, or it would load the snapshot from before that
+// save and later write its stale copy back over the newer one.
+const pendingSaves = new Map(); // roomId -> Promise
+
 async function attemptLoad(roomId, room, attempt) {
   room.loadTimer = null;
+  if (room.closed) return;
+  await pendingSaves.get(roomId);
   if (room.closed) return;
   const result = await store.load(roomId, room.doc);
   if (room.closed) return;
@@ -225,7 +232,12 @@ wss.on("connection", (ws, req) => {
       // safe to write, so just drop the room (and its timers).
       const { loaded, doc } = room;
       disposeRoom(roomId, room);
-      if (loaded) store.save(roomId, doc);
+      if (loaded) {
+        const p = store.save(roomId, doc).finally(() => {
+          if (pendingSaves.get(roomId) === p) pendingSaves.delete(roomId);
+        });
+        pendingSaves.set(roomId, p);
+      }
       else console.error(`dropping ${roomId}: snapshot never loaded, edits not persisted`);
     }
   });
