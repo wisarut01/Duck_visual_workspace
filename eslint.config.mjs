@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Parallel-agent worktrees carry their own copy of the repo and its .next output.
+    ".claude/**",
   ]),
 ]);
 
