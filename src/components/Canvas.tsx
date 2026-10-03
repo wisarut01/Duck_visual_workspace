@@ -31,6 +31,7 @@ import {
   addArrow,
   addImage,
   addTable,
+  addTableFromGrid,
   updateFields,
   deleteObj,
   getBoardName,
@@ -46,7 +47,7 @@ import { toolbarStyle, centeredToolbarStyle, counterScale, screenPxToWorld, zoom
 // identical `Corner` under the same name would collide with it.
 import { aspectResize } from "@/lib/aspect-resize";
 import { readBodyText } from "@/lib/body-text";
-import { normalizePastedText, pickPasteAction } from "@/lib/paste";
+import { normalizePastedText, pickPasteAction, pastedGrid } from "@/lib/paste";
 import { objectBounds, objectsInRegion, type Rect as ExportRect } from "@/lib/export-bounds";
 import { exportToPdf, type DrawableObject, type ResolvedArrowData } from "@/lib/export-pdf";
 import ThemeToggle from "./ThemeToggle";
@@ -1116,6 +1117,12 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
     }
     const p = lastPointerRef.current ?? { x: window.innerWidth / 2, y: window.innerHeight / 2 };
     const w = screenToWorld(p.x, p.y);
+    // A spreadsheet selection becomes a table rather than a note full of tabs.
+    const grid = pastedGrid(cd.getData("text/plain"));
+    if (grid) {
+      setSelection({ kind: "table", id: addTableFromGrid(board, w.x, w.y, grid) });
+      return;
+    }
     const body = normalizePastedText(cd.getData("text/plain"));
     let id = "";
     board.doc.transact(() => {

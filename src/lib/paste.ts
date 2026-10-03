@@ -1,4 +1,5 @@
 import { ALLOWED_UPLOAD_MIME_TYPES } from "./uploads";
+import { parseTsv } from "./table";
 
 export const MAX_PASTE_CHARS = 5000;
 
@@ -18,4 +19,18 @@ export function pickPasteAction(data: { text: string; imageTypes: string[] }): "
   if (normalizePastedText(data.text) !== "") return "text";
   const allowed = ALLOWED_UPLOAD_MIME_TYPES as readonly string[];
   return data.imageTypes.some((t) => allowed.includes(t)) ? "image" : "none";
+}
+
+// A spreadsheet copy (Excel / Google Sheets) arrives as TSV. Returns its cells
+// when the text really looks like one, so the paste can become a table; null
+// for anything else that merely contains tabs — tab-indented code has a
+// ragged tab count per line, or an entirely empty first column.
+export function pastedGrid(text: string): string[][] | null {
+  const lines = text.replace(/\r\n?/g, "\n").replace(/\n$/, "").split("\n");
+  const tabs = lines.map((l) => l.split("\t").length - 1);
+  if (tabs[0] === 0 || tabs.some((n) => n !== tabs[0])) return null;
+  const grid = parseTsv(text);
+  if (!grid) return null;
+  if (grid.every((row) => row[0].trim() === "")) return null;
+  return grid;
 }
