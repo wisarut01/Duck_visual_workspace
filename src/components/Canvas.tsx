@@ -1074,7 +1074,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
   function onPaste(e: ClipboardEvent) {
     const target = e.target as HTMLElement | null;
-    if (target && target.tagName === "INPUT") return; // native paste
+    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return; // native paste
     const cd = e.clipboardData;
     if (!cd) return;
     if (target && target.isContentEditable) {

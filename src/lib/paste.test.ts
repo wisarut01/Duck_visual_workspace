@@ -27,8 +27,8 @@ describe("pickPasteAction", () => {
       expect(pickPasteAction({ text: "", imageTypes: [t] })).toBe("image");
     }
   });
-  it("image wins over text", () => {
-    expect(pickPasteAction({ text: "hello", imageTypes: ["image/png"] })).toBe("image");
+  it("text wins over an image rendition of it", () => {
+    expect(pickPasteAction({ text: "hello", imageTypes: ["image/png"] })).toBe("text");
   });
   it("ignores disallowed image types", () => {
     expect(pickPasteAction({ text: "hi", imageTypes: ["image/svg+xml"] })).toBe("text");
