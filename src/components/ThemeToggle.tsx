@@ -3,48 +3,49 @@
 import { useSyncExternalStore } from "react";
 import styles from "./ThemeToggle.module.css";
 import {
-  nextTheme,
+  toggleTheme,
   setTheme,
   subscribeTheme,
-  getThemeSnapshot,
-  getServerThemeSnapshot,
-  type Theme,
+  getResolvedThemeSnapshot,
+  type ResolvedTheme,
 } from "@/lib/theme";
 
-const ICON: Record<Theme, string> = {
+const ICON: Record<ResolvedTheme, string> = {
   light: "☀",
   dark: "☾",
-  system: "◐",
 };
 
-const LABEL: Record<Theme, string> = {
+const LABEL: Record<ResolvedTheme, string> = {
   light: "Light",
   dark: "Dark",
-  system: "System",
 };
+
+const NEUTRAL_ICON = "◐";
 
 export interface ThemeToggleProps {
   className?: string;
 }
 
 export default function ThemeToggle({ className }: ThemeToggleProps) {
-  // Same useSyncExternalStore-based hydration guard as JoinCard's submit
-  // button, generalized to the theme value itself: the server (and the
-  // client's pre-hydration paint, which must match it) always sees
-  // "system"/not-mounted, so there's no window where a click could read a
-  // stale snapshot or where hydration sees mismatched text.
-  const theme = useSyncExternalStore(subscribeTheme, getThemeSnapshot, getServerThemeSnapshot);
+  // The displayed (resolved) theme depends on the OS, which the server can't
+  // know, so the server snapshot is a placeholder and the button stays
+  // disabled with a neutral icon until hydrated (mounted flag). Both are
+  // useSyncExternalStore reads — no effect+setState.
+  const resolved = useSyncExternalStore(
+    subscribeTheme,
+    getResolvedThemeSnapshot,
+    (): ResolvedTheme => "light",
+  );
   const mounted = useSyncExternalStore(
     () => () => {},
     () => true,
     () => false,
   );
 
-  const displayed: Theme = mounted ? theme : "system";
-  const upcoming = LABEL[nextTheme(displayed)];
+  const upcoming = toggleTheme(resolved);
 
   function handleClick() {
-    setTheme(nextTheme(displayed));
+    setTheme(toggleTheme(resolved));
   }
 
   return (
@@ -54,10 +55,14 @@ export default function ThemeToggle({ className }: ThemeToggleProps) {
       onClick={handleClick}
       onPointerDown={(e) => e.stopPropagation()}
       disabled={!mounted}
-      aria-label={`Theme: ${LABEL[displayed]}. Click to switch to ${upcoming}.`}
-      title={`Theme: ${LABEL[displayed]} (click for ${upcoming})`}
+      aria-label={
+        mounted
+          ? `Theme: ${LABEL[resolved]}. Click to switch to ${LABEL[upcoming]}.`
+          : "Theme"
+      }
+      title={mounted ? `Theme: ${LABEL[resolved]} (click for ${LABEL[upcoming]})` : "Theme"}
     >
-      {ICON[displayed]}
+      {mounted ? ICON[resolved] : NEUTRAL_ICON}
     </button>
   );
 }

@@ -14,8 +14,6 @@ export type ResolvedTheme = "light" | "dark";
 
 export const THEME_STORAGE_KEY = "coboard:theme";
 
-const ORDER: Theme[] = ["light", "dark", "system"];
-
 function isTheme(v: unknown): v is Theme {
   return v === "light" || v === "dark" || v === "system";
 }
@@ -60,10 +58,12 @@ export function applyTheme(theme: Theme): ResolvedTheme {
   return resolved;
 }
 
-/** Cycle order for the toggle button: light -> dark -> system -> light. */
-export function nextTheme(theme: Theme): Theme {
-  const i = ORDER.indexOf(theme);
-  return ORDER[(i + 1) % ORDER.length];
+/**
+ * Toggle button behavior: always the opposite of what is currently displayed,
+ * so one click always changes the visible theme ("system" resolves via the OS).
+ */
+export function toggleTheme(current: Theme): ResolvedTheme {
+  return resolveTheme(current) === "dark" ? "light" : "dark";
 }
 
 // --- Tiny external store, so ThemeToggle can use useSyncExternalStore for
@@ -75,15 +75,37 @@ export function nextTheme(theme: Theme): Theme {
 type Listener = () => void;
 const listeners = new Set<Listener>();
 
-/** Subscribe to theme changes made via setTheme() (any component instance). */
+/**
+ * Subscribe to theme changes made via setTheme() (any component instance).
+ * While the stored value is "system", also follows live OS theme changes:
+ * re-stamps data-theme and notifies all subscribers.
+ */
 export function subscribeTheme(listener: Listener): () => void {
   listeners.add(listener);
-  return () => listeners.delete(listener);
+  let mq: MediaQueryList | null = null;
+  const onOsChange = () => {
+    if (readStored() !== "system") return;
+    applyTheme("system");
+    listeners.forEach((l) => l());
+  };
+  if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+    mq = window.matchMedia("(prefers-color-scheme: dark)");
+    mq.addEventListener?.("change", onOsChange);
+  }
+  return () => {
+    listeners.delete(listener);
+    mq?.removeEventListener?.("change", onOsChange);
+  };
 }
 
 /** Snapshot for useSyncExternalStore's client getSnapshot. */
 export function getThemeSnapshot(): Theme {
   return readStored();
+}
+
+/** Snapshot of the theme actually displayed (stored value resolved against the OS). */
+export function getResolvedThemeSnapshot(): ResolvedTheme {
+  return resolveTheme(readStored());
 }
 
 /** Snapshot for useSyncExternalStore's getServerSnapshot (SSR + pre-hydration paint). */

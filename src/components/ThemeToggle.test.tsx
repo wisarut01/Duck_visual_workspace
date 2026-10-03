@@ -40,35 +40,52 @@ describe("ThemeToggle", () => {
     expect(button.getAttribute("aria-label") || button.getAttribute("title")).toBeTruthy();
   });
 
-  it("clicking advances the theme (system -> light) and updates the label", () => {
+  it("shows a sun and light label when the OS is light", () => {
     render(<ThemeToggle />);
     const button = screen.getByRole("button");
-    const before = button.getAttribute("aria-label") || button.getAttribute("title");
-    fireEvent.click(button);
-    const after = button.getAttribute("aria-label") || button.getAttribute("title");
-    expect(after).not.toBe(before);
+    expect(button.getAttribute("aria-label")).toBe("Theme: Light. Click to switch to Dark.");
+    expect(button.textContent).toBe("☀");
   });
 
-  it("persists the new theme to localStorage on click", () => {
+  it("shows a moon and dark label when the OS is dark", () => {
+    mockMatchMedia(true);
     render(<ThemeToggle />);
     const button = screen.getByRole("button");
-    fireEvent.click(button);
+    expect(button.getAttribute("aria-label")).toBe("Theme: Dark. Click to switch to Light.");
+    expect(button.textContent).toBe("☾");
+  });
+
+  it("first click from system flips the visible theme (OS light -> dark)", () => {
+    render(<ThemeToggle />);
+    fireEvent.click(screen.getByRole("button"));
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
+    expect(document.documentElement.dataset.theme).toBe("dark");
+  });
+
+  it("first click from system flips the visible theme (OS dark -> light)", () => {
+    mockMatchMedia(true);
+    render(<ThemeToggle />);
+    fireEvent.click(screen.getByRole("button"));
     expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
-  });
-
-  it("cycling three clicks returns to the starting persisted value", () => {
-    render(<ThemeToggle />);
-    const button = screen.getByRole("button");
-    fireEvent.click(button); // system -> light
-    fireEvent.click(button); // light -> dark
-    fireEvent.click(button); // dark -> system
-    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("system");
-  });
-
-  it("applies data-theme to document.documentElement on click", () => {
-    render(<ThemeToggle />);
-    const button = screen.getByRole("button");
-    fireEvent.click(button); // -> light
     expect(document.documentElement.dataset.theme).toBe("light");
+  });
+
+  it("every click flips light <-> dark and updates the label", () => {
+    render(<ThemeToggle />);
+    const button = screen.getByRole("button");
+    fireEvent.click(button);
+    expect(button.getAttribute("aria-label")).toBe("Theme: Dark. Click to switch to Light.");
+    fireEvent.click(button);
+    expect(button.getAttribute("aria-label")).toBe("Theme: Light. Click to switch to Dark.");
+    expect(document.documentElement.dataset.theme).toBe("light");
+    fireEvent.click(button);
+    expect(document.documentElement.dataset.theme).toBe("dark");
+  });
+
+  it("title mirrors the label", () => {
+    render(<ThemeToggle />);
+    expect(screen.getByRole("button").getAttribute("title")).toBe(
+      "Theme: Light (click for Dark)",
+    );
   });
 });
