@@ -12,7 +12,8 @@ import jsPDF from "jspdf";
 import { elbowPoints, roundedPath } from "./connector-path";
 import { fitToPage, type Rect } from "./export-bounds";
 import { NOTE_COLORS } from "./palette";
-import type { NoteData, ShapeData, TextData, FrameData, ArrowData, ImageData, ShapeKind, Side } from "./board-doc";
+import { cellKey, tableSize } from "./table";
+import type { NoteData, ShapeData, TextData, FrameData, ArrowData, ImageData, TableData, ShapeKind, Side } from "./board-doc";
 
 // Arrows carry their bound-side info (if any) only for the duration of an
 // export — ArrowData itself doesn't have these fields; Canvas.tsx resolves
@@ -27,6 +28,7 @@ export type DrawableObject =
   | { kind: "text"; id: string; data: TextData }
   | { kind: "frame"; id: string; data: FrameData }
   | { kind: "image"; id: string; data: ImageData }
+  | { kind: "table"; id: string; data: TableData; cells: Record<string, string> }
   | { kind: "arrow"; id: string; data: ResolvedArrowData };
 
 // The exported PDF always renders as if on a plain white page in "light"
@@ -244,6 +246,49 @@ function drawObject(ctx: CanvasRenderingContext2D, obj: DrawableObject, imageEls
         ctx.fillStyle = "#8a8272";
         ctx.font = "12px sans-serif";
         ctx.fillText("image unavailable", obj.data.x + 8, obj.data.y + 18);
+      }
+      ctx.restore();
+      return;
+    }
+    case "table": {
+      const { x, y, rows, cols, colWidths, rowHeights } = obj.data;
+      const { w, h } = tableSize(obj.data);
+      ctx.save();
+      ctx.strokeStyle = "#c9c2b4";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x, y, w, h);
+      let cy = y;
+      for (let r = 0; r < rows; r++) {
+        if (r > 0) {
+          ctx.beginPath();
+          ctx.moveTo(x, cy);
+          ctx.lineTo(x + w, cy);
+          ctx.stroke();
+        }
+        let cx = x;
+        for (let c = 0; c < cols; c++) {
+          if (r === 0 && c > 0) {
+            ctx.beginPath();
+            ctx.moveTo(cx, y);
+            ctx.lineTo(cx, y + h);
+            ctx.stroke();
+          }
+          const text = obj.cells[cellKey(r, c)];
+          if (text) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(cx, cy, colWidths[c], rowHeights[r]);
+            ctx.clip();
+            ctx.fillStyle = EXPORT_INK;
+            ctx.font = "14px sans-serif";
+            ctx.textAlign = "left";
+            ctx.textBaseline = "alphabetic";
+            wrapText(ctx, text, cx + 8, cy + 20, colWidths[c] - 16, 17);
+            ctx.restore();
+          }
+          cx += colWidths[c];
+        }
+        cy += rowHeights[r];
       }
       ctx.restore();
       return;
