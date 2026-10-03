@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { parseRoomId, randomRoomId, USER_COLORS } from "./room";
 
 describe("room.ts (regression)", () => {
@@ -29,9 +29,27 @@ describe("room.ts (regression)", () => {
   });
 
   describe("randomRoomId", () => {
-    it("produces an adjective-noun-number shaped id", () => {
+    it("produces an adjective-noun-<10 char suffix> shaped id", () => {
+      for (let i = 0; i < 50; i++) {
+        expect(randomRoomId()).toMatch(/^[a-z]+-[a-z]+-[a-z0-9]{10}$/);
+      }
+    });
+
+    it("survives the relay's roomKey sanitiser unchanged", () => {
       const id = randomRoomId();
-      expect(id).toMatch(/^[a-z]+-[a-z]+-\d{3}$/);
+      expect(id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 100)).toBe(id);
+    });
+
+    it("does not use Math.random", () => {
+      const spy = vi.spyOn(Math, "random");
+      randomRoomId();
+      expect(spy).not.toHaveBeenCalled();
+      spy.mockRestore();
+    });
+
+    it("round-trips through parseRoomId", () => {
+      const id = randomRoomId();
+      expect(parseRoomId(`https://host/board/${id}`)).toBe(id);
     });
 
     it("produces different ids across calls (not a constant)", () => {

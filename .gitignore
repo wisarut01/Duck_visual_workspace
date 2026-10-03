@@ -48,3 +48,5 @@ next-env.d.ts
 
 # Parallel-agent git worktrees (local scratch, never committed)
 .claude/worktrees/
+
+!.env.example
