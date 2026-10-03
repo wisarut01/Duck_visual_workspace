@@ -43,6 +43,8 @@ import { toolbarStyle, centeredToolbarStyle, counterScale, screenPxToWorld, zoom
 // shared ResizeHandles component below); importing a second, structurally
 // identical `Corner` under the same name would collide with it.
 import { aspectResize } from "@/lib/aspect-resize";
+import { readBodyText } from "@/lib/body-text";
+import { normalizePastedText, pickPasteAction } from "@/lib/paste";
 import { objectBounds, objectsInRegion, type Rect as ExportRect } from "@/lib/export-bounds";
 import { exportToPdf, type DrawableObject, type ResolvedArrowData } from "@/lib/export-pdf";
 import ThemeToggle from "./ThemeToggle";
@@ -1064,6 +1066,74 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
       setTool("select");
     }
   }, [tool, isSignedIn]);
+
+  // ================= clipboard paste =================
+  // One native document-level listener (not a JSX onPaste) so it also fires
+  // when nothing is focused. The handler lives in a ref refreshed every
+  // render, same pattern as zoomAtRef, so the listener never re-attaches.
+  const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
+  function onPaste(e: ClipboardEvent) {
+    const target = e.target as HTMLElement | null;
+    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return; // native paste
+    const cd = e.clipboardData;
+    if (!cd) return;
+    if (target && target.isContentEditable) {
+      // Plain text only, never HTML.
+      e.preventDefault();
+      const text = normalizePastedText(cd.getData("text/plain"));
+      const sel = window.getSelection();
+      if (!text || !sel || sel.rangeCount === 0) return;
+      const range = sel.getRangeAt(0);
+      range.deleteContents();
+      const node = document.createTextNode(text);
+      range.insertNode(node);
+      range.setStartAfter(node);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      return;
+    }
+    const imageFile = Array.from(cd.files).find((f) => pickPasteAction({ text: "", imageTypes: [f.type] }) === "image");
+    const action = pickPasteAction({
+      text: cd.getData("text/plain"),
+      imageTypes: imageFile ? [imageFile.type] : [],
+    });
+    if (action === "none") return;
+    e.preventDefault();
+    if (action === "image" && imageFile) {
+      if (!isSignedIn) {
+        window.alert("Sign in to add images — use “My boards” in the top-left corner.");
+        return;
+      }
+      void onImageFileSelected(imageFile);
+      return;
+    }
+    const p = lastPointerRef.current ?? { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+    const w = screenToWorld(p.x, p.y);
+    const body = normalizePastedText(cd.getData("text/plain"));
+    let id = "";
+    board.doc.transact(() => {
+      id = addNote(board, w.x - 86, w.y - 86, activeColor, "you");
+      updateFields(board.doc, board.notes, id, { body });
+    });
+    setSelection({ kind: "note", id });
+  }
+  const onPasteRef = useRef(onPaste);
+  useEffect(() => {
+    onPasteRef.current = onPaste;
+  });
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      lastPointerRef.current = { x: e.clientX, y: e.clientY };
+    };
+    const onDocPaste = (e: ClipboardEvent) => onPasteRef.current(e);
+    window.addEventListener("pointermove", onMove);
+    document.addEventListener("paste", onDocPaste);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      document.removeEventListener("paste", onDocPaste);
+    };
+  }, []);
 
   // ================= F1b: PDF export =================
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
@@ -2296,7 +2366,7 @@ function NoteItem({
           }}
           contentEditable
           suppressContentEditableWarning
-          onBlur={(e) => updateFields(board.doc, board.notes, id, { body: e.currentTarget.textContent ?? "" })}
+          onBlur={(e) => updateFields(board.doc, board.notes, id, { body: readBodyText(e.currentTarget) })}
           onKeyDown={(e) => handleStyleKeyDown(e, data, (patch) => updateFields(board.doc, board.notes, id, patch))}
         >
           {data.body}
@@ -2447,7 +2517,7 @@ function ShapeItem({
           }}
           contentEditable
           suppressContentEditableWarning
-          onBlur={(e) => updateFields(board.doc, board.shapes, id, { body: e.currentTarget.textContent ?? "" })}
+          onBlur={(e) => updateFields(board.doc, board.shapes, id, { body: readBodyText(e.currentTarget) })}
           onKeyDown={(e) => handleStyleKeyDown(e, data, (patch) => updateFields(board.doc, board.shapes, id, patch))}
         >
           {data.body}
@@ -2548,7 +2618,7 @@ function TextItem({
           }}
           contentEditable
           suppressContentEditableWarning
-          onBlur={(e) => updateFields(board.doc, board.texts, id, { body: e.currentTarget.textContent ?? "" })}
+          onBlur={(e) => updateFields(board.doc, board.texts, id, { body: readBodyText(e.currentTarget) })}
           onKeyDown={(e) => handleStyleKeyDown(e, data, (patch) => updateFields(board.doc, board.texts, id, patch))}
         >
           {data.body}
@@ -2881,7 +2951,7 @@ export function FrameItem({
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
-            onBlur={(e) => updateFields(board.doc, board.frames, id, { label: e.currentTarget.textContent ?? "" })}
+            onBlur={(e) => updateFields(board.doc, board.frames, id, { label: readBodyText(e.currentTarget) })}
           >
             {data.label}
           </div>
