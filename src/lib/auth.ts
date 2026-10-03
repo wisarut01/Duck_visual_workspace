@@ -35,6 +35,7 @@ export async function startSession(userId: string) {
   jar.set(SESSION_COOKIE, id, {
     httpOnly: true,
     sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
     path: "/",
     maxAge: SESSION_TTL_MS / 1000,
   });
@@ -52,7 +53,16 @@ export async function currentUser(): Promise<UserRow | null> {
   const id = jar.get(SESSION_COOKIE)?.value;
   if (!id) return null;
   const session = await getSession(id);
-  if (!session || session.expires_at < Date.now()) return null;
+  if (!session) return null;
+  if (session.expires_at < Date.now()) {
+    // Best-effort cleanup; an expired session is already unusable.
+    try {
+      await deleteSession(id);
+    } catch {
+      // ignore: cleanup must never break the request
+    }
+    return null;
+  }
   return (await getUserById(session.user_id)) ?? null;
 }
 

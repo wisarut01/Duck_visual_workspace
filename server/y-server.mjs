@@ -13,6 +13,7 @@ import * as decoding from "lib0/decoding";
 import { createServer } from "http";
 import { parse } from "url";
 import { createClient } from "@supabase/supabase-js";
+import { createSnapshotStore } from "./snapshot-store.mjs";
 
 const MESSAGE_SYNC = 0;
 const MESSAGE_AWARENESS = 1;
@@ -26,65 +27,91 @@ if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
 }
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
-// roomId comes straight from the URL path — never trust it as a raw key.
-function roomKey(roomId) {
-  return roomId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 100) || "default";
+const store = createSnapshotStore(supabase);
+
+const LOAD_RETRY_BASE_MS = 1000;
+const LOAD_RETRY_MAX_MS = 30000;
+const MAX_PAYLOAD_BYTES = 8 * 1024 * 1024;
+
+// room.loaded is false until the stored snapshot resolved "loaded"/"empty".
+// An unloaded room must never be saved: its doc lacks the stored board, so an
+// upsert would overwrite real data. Edits made meanwhile stay in memory and
+// are merged (Yjs updates commute) once a later load succeeds.
+const rooms = new Map(); // roomId -> { doc, awareness, conns, saveTimer, loadTimer, loaded, dirty, closed }
+
+function scheduleSave(roomId, room) {
+  clearTimeout(room.saveTimer);
+  room.saveTimer = setTimeout(() => saveRoom(roomId, room), SAVE_DEBOUNCE_MS);
 }
 
-async function loadDoc(roomId, doc) {
-  const { data, error } = await supabase
-    .from("board_snapshots")
-    .select("data")
-    .eq("room_id", roomKey(roomId))
-    .maybeSingle();
-  if (error) {
-    console.error(`load failed for ${roomId}:`, error.message);
+async function saveRoom(roomId, room) {
+  if (!room.loaded) return false;
+  room.dirty = false;
+  const ok = await store.save(roomId, room.doc);
+  if (!ok) {
+    room.dirty = true;
+    // Retry later only while the room is still alive; the close path and
+    // flushAll make their own final attempt.
+    if (!room.closed) scheduleSave(roomId, room);
+  }
+  return ok;
+}
+
+async function attemptLoad(roomId, room, attempt) {
+  room.loadTimer = null;
+  if (room.closed) return;
+  const result = await store.load(roomId, room.doc);
+  if (room.closed) return;
+  if (result === "failed") {
+    const delay = Math.min(LOAD_RETRY_BASE_MS * 2 ** attempt, LOAD_RETRY_MAX_MS);
+    console.error(`load for ${roomId} failed, retrying in ${delay}ms`);
+    room.loadTimer = setTimeout(() => attemptLoad(roomId, room, attempt + 1), delay);
     return;
   }
-  if (data?.data) {
-    try {
-      // bytea comes back as a "\x"-prefixed hex string over the JS client.
-      Y.applyUpdate(doc, Buffer.from(data.data.slice(2), "hex"), "remote-load");
-    } catch (err) {
-      console.error(`corrupt snapshot for ${roomId}, starting fresh:`, err.message);
-    }
-  }
+  room.loaded = true;
+  if (room.dirty) scheduleSave(roomId, room);
 }
-
-async function saveDoc(roomId, doc) {
-  // PostgREST needs bytea as a "\x"-prefixed hex string in the JSON body —
-  // a raw Buffer/Uint8Array serializes as {"type":"Buffer","data":[...]}
-  // instead, which silently corrupts the stored column.
-  const hex = "\\x" + Buffer.from(Y.encodeStateAsUpdate(doc)).toString("hex");
-  const { error } = await supabase
-    .from("board_snapshots")
-    .upsert({ room_id: roomKey(roomId), data: hex, updated_at: new Date().toISOString() });
-  if (error) console.error(`save failed for ${roomId}:`, error.message);
-}
-
-const rooms = new Map(); // roomId -> { doc, awareness, conns: Set<ws>, saveTimer }
 
 function getRoom(roomId) {
   let room = rooms.get(roomId);
   if (!room) {
     const doc = new Y.Doc();
-    loadDoc(roomId, doc).catch((err) => console.error(`load failed for ${roomId}:`, err.message));
     const awareness = new awarenessProtocol.Awareness(doc);
-    room = { doc, awareness, conns: new Set(), saveTimer: null };
+    room = {
+      doc,
+      awareness,
+      conns: new Set(),
+      saveTimer: null,
+      loadTimer: null,
+      loaded: false,
+      dirty: false,
+      closed: false,
+    };
+    const r = room;
     doc.on("update", (_update, origin) => {
       if (origin === "remote-load") return;
-      clearTimeout(room.saveTimer);
-      room.saveTimer = setTimeout(() => saveDoc(roomId, doc), SAVE_DEBOUNCE_MS);
+      r.dirty = true;
+      if (r.loaded) scheduleSave(roomId, r);
     });
     rooms.set(roomId, room);
+    attemptLoad(roomId, room, 0).catch((err) => console.error(`load failed for ${roomId}:`, err.message));
   }
   return room;
+}
+
+function disposeRoom(roomId, room) {
+  room.closed = true;
+  clearTimeout(room.saveTimer);
+  clearTimeout(room.loadTimer);
+  room.awareness.destroy();
+  if (rooms.get(roomId) === room) rooms.delete(roomId);
 }
 
 async function flushAll() {
   for (const [roomId, room] of rooms) {
     clearTimeout(room.saveTimer);
-    await saveDoc(roomId, room.doc);
+    if (room.loaded) await store.save(roomId, room.doc);
+    else console.error(`not saving ${roomId}: snapshot never loaded`);
   }
 }
 
@@ -111,7 +138,7 @@ const httpServer = createServer((req, res) => {
   res.end("y-websocket relay ok\n");
 });
 
-const wss = new WebSocketServer({ server: httpServer });
+const wss = new WebSocketServer({ server: httpServer, maxPayload: MAX_PAYLOAD_BYTES });
 
 wss.on("connection", (ws, req) => {
   const { pathname } = parse(req.url || "/");
@@ -194,11 +221,12 @@ wss.on("connection", (ws, req) => {
     console.log(`- ${roomId} (${room.conns.size} connected)`);
     if (room.conns.size === 0) {
       // Flush to Supabase before dropping the in-memory doc — the next open
-      // reloads from there, so nothing written since the last debounced
-      // save may be lost.
-      clearTimeout(room.saveTimer);
-      saveDoc(roomId, room.doc);
-      rooms.delete(roomId);
+      // reloads from there. If the load never succeeded there is nothing
+      // safe to write, so just drop the room (and its timers).
+      const { loaded, doc } = room;
+      disposeRoom(roomId, room);
+      if (loaded) store.save(roomId, doc);
+      else console.error(`dropping ${roomId}: snapshot never loaded, edits not persisted`);
     }
   });
 });
