@@ -5,8 +5,9 @@ import {
   writeStored,
   resolveTheme,
   applyTheme,
-  nextTheme,
-  type Theme,
+  toggleTheme,
+  subscribeTheme,
+  setTheme,
 } from "./theme";
 
 function mockMatchMedia(matchesDark: boolean) {
@@ -111,23 +112,75 @@ describe("theme.ts", () => {
     });
   });
 
-  describe("nextTheme", () => {
-    it("cycles light -> dark -> system -> light", () => {
-      const seen: Theme[] = [];
-      let t: Theme = "light";
-      for (let i = 0; i < 4; i++) {
-        seen.push(t);
-        t = nextTheme(t);
-      }
-      expect(seen).toEqual(["light", "dark", "system", "light"]);
+  describe("toggleTheme", () => {
+    it("light -> dark", () => {
+      expect(toggleTheme("light")).toBe("dark");
     });
 
-    it("dark advances to system", () => {
-      expect(nextTheme("dark")).toBe("system");
+    it("dark -> light", () => {
+      expect(toggleTheme("dark")).toBe("light");
     });
 
-    it("system advances to light", () => {
-      expect(nextTheme("system")).toBe("light");
+    it("system -> opposite of an OS that prefers dark", () => {
+      mockMatchMedia(true);
+      expect(toggleTheme("system")).toBe("light");
+    });
+
+    it("system -> opposite of an OS that prefers light", () => {
+      mockMatchMedia(false);
+      expect(toggleTheme("system")).toBe("dark");
+    });
+  });
+
+  describe("OS theme change while stored value is system", () => {
+    function mockChangeableMatchMedia() {
+      let dark = false;
+      const handlers = new Set<() => void>();
+      window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+        get matches() {
+          return query.includes("dark") ? dark : false;
+        },
+        media: query,
+        addEventListener: (_: string, h: () => void) => handlers.add(h),
+        removeEventListener: (_: string, h: () => void) => handlers.delete(h),
+      })) as unknown as typeof window.matchMedia;
+      return {
+        setDark(v: boolean) {
+          dark = v;
+          handlers.forEach((h) => h());
+        },
+        count: () => handlers.size,
+      };
+    }
+
+    it("re-applies data-theme and notifies subscribers", () => {
+      const os = mockChangeableMatchMedia();
+      setTheme("system");
+      const l = vi.fn();
+      const unsub = subscribeTheme(l);
+      os.setDark(true);
+      expect(document.documentElement.dataset.theme).toBe("dark");
+      expect(l).toHaveBeenCalled();
+      unsub();
+    });
+
+    it("ignores OS changes when an explicit theme is stored", () => {
+      const os = mockChangeableMatchMedia();
+      setTheme("light");
+      const l = vi.fn();
+      const unsub = subscribeTheme(l);
+      os.setDark(true);
+      expect(document.documentElement.dataset.theme).toBe("light");
+      expect(l).not.toHaveBeenCalled();
+      unsub();
+    });
+
+    it("removes the OS listener on unsubscribe", () => {
+      const os = mockChangeableMatchMedia();
+      const unsub = subscribeTheme(() => {});
+      expect(os.count()).toBe(1);
+      unsub();
+      expect(os.count()).toBe(0);
     });
   });
 });
