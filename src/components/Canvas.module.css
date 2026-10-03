@@ -9,6 +9,14 @@
   cursor: default;
   touch-action: none;
   user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Safari/iOS won't select or paste inside a contentEditable that inherits
+   user-select: none, so bodies opt back in. */
+.viewport [contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
 }
 .viewport.toolPan { cursor: grab; }
 .viewport.panning { cursor: grabbing; }
