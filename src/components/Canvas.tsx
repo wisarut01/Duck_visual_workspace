@@ -14,6 +14,7 @@ import {
   type FrameData,
   type ArrowData,
   type ImageData,
+  type TableData,
   type ShapeKind,
   type Presence,
   type TextAlign,
@@ -29,6 +30,7 @@ import {
   addFrame,
   addArrow,
   addImage,
+  addTable,
   updateFields,
   deleteObj,
   getBoardName,
@@ -48,6 +50,8 @@ import { normalizePastedText, pickPasteAction } from "@/lib/paste";
 import { objectBounds, objectsInRegion, type Rect as ExportRect } from "@/lib/export-bounds";
 import { exportToPdf, type DrawableObject, type ResolvedArrowData } from "@/lib/export-pdf";
 import ThemeToggle from "./ThemeToggle";
+import TableItem from "./TableItem";
+import { cellsOf, tableSize } from "@/lib/table";
 import type { WebsocketProvider } from "y-websocket";
 
 type ConnState = "connecting" | "connected" | "disconnected";
@@ -55,11 +59,11 @@ interface RemotePresence extends Presence {
   clientId: number;
 }
 
-type Tool = "select" | "pan" | "note" | "text" | "rect" | "ellipse" | "diamond" | "frame" | "arrow" | "image";
-type ObjKind = "note" | "shape" | "text" | "frame" | "arrow" | "image";
-type Selection = { kind: ObjKind; id: string } | null;
+export type Tool = "select" | "pan" | "note" | "text" | "rect" | "ellipse" | "diamond" | "frame" | "arrow" | "image" | "table";
+type ObjKind = "note" | "shape" | "text" | "frame" | "arrow" | "image" | "table";
+export type Selection = { kind: ObjKind; id: string } | null;
 
-interface ViewState {
+export interface ViewState {
   x: number;
   y: number;
   s: number;
@@ -85,7 +89,7 @@ const DBLCLICK_PX = 6;
 // can't be detected via the dblclick event at all here — it has to be
 // reconstructed from consecutive pointerdowns' timing/position instead,
 // which is what bodyRef + the two constants above are for.
-function useSimpleDrag(
+export function useSimpleDrag(
   board: BoardDoc,
   container: NoteKind,
   kind: ObjKind,
@@ -736,6 +740,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
   const frames = useYCollection<FrameData>(board.frames);
   const arrows = useYCollection<ArrowData>(board.arrows);
   const images = useYCollection<ImageData>(board.images);
+  const tables = useYCollection<TableData>(board.tables);
 
   const [view, setView] = useState<ViewState>({ x: 0, y: 0, s: 1 });
   useEffect(() => {
@@ -885,6 +890,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
         frame: board.frames,
         arrow: board.arrows,
         image: board.images,
+        table: board.tables,
       };
       deleteObj(board.doc, containers[sel.kind], sel.id);
       setSelection(null);
@@ -1182,6 +1188,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
       ...texts.map(({ id, data }) => ({ id, bounds: objectBounds("text", data) })),
       ...frames.map(({ id, data }) => ({ id, bounds: objectBounds("frame", data) })),
       ...images.map(({ id, data }) => ({ id, bounds: objectBounds("image", data) })),
+      ...tables.map(({ id, data }) => ({ id, bounds: objectBounds("table", data) })),
       ...arrowsResolved.map(({ id, data }) => ({ id, bounds: objectBounds("arrow", data) })),
     ];
     // Object ids are prefixed per-kind by newId() in board-doc.ts
@@ -1195,6 +1202,8 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
     for (const { id, data } of texts) if (includedIds.has(id)) drawables.push({ kind: "text", id, data });
     for (const { id, data } of frames) if (includedIds.has(id)) drawables.push({ kind: "frame", id, data });
     for (const { id, data } of images) if (includedIds.has(id)) drawables.push({ kind: "image", id, data });
+    for (const { id, data } of tables)
+      if (includedIds.has(id)) drawables.push({ kind: "table", id, data, cells: cellsOf(data) });
     for (const { id, data } of arrowsResolved) if (includedIds.has(id)) drawables.push({ kind: "arrow", id, data });
 
     if (drawables.length === 0) {
@@ -1212,6 +1221,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
       ...texts.map(({ data }) => objectBounds("text", data)),
       ...frames.map(({ data }) => objectBounds("frame", data)),
       ...images.map(({ data }) => objectBounds("image", data)),
+      ...tables.map(({ data }) => objectBounds("table", data)),
       ...resolveArrowsForExport().map(({ data }) => objectBounds("arrow", data)),
     ];
     if (all.length === 0) {
@@ -1296,6 +1306,13 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
       const id = addText(board, w.x, w.y - 14);
       setSelection({ kind: "text", id });
       setJustCreated(id);
+      setTool("select");
+      return;
+    }
+    if (tool === "table") {
+      e.preventDefault();
+      const id = addTable(board, w.x, w.y, 3, 3);
+      setSelection({ kind: "table", id });
       setTool("select");
       return;
     }
@@ -1534,7 +1551,7 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
       }
       const map: Record<string, Tool> = {
         v: "select", h: "pan", n: "note", t: "text",
-        r: "rect", o: "ellipse", d: "diamond", a: "arrow", f: "frame", i: "image",
+        r: "rect", o: "ellipse", d: "diamond", a: "arrow", f: "frame", i: "image", g: "table",
       };
       const k = e.key.toLowerCase();
       if (map[k]) setTool(map[k]);
@@ -1612,6 +1629,21 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
             allTexts={texts}
             allArrows={arrows}
             allImages={images}
+            allTables={tables}
+            onDelete={deleteSelection}
+          />
+        ))}
+
+        {tables.map(({ id, data }) => (
+          <TableItem
+            key={id}
+            board={board}
+            id={id}
+            data={data}
+            view={view}
+            tool={tool}
+            selected={selection?.kind === "table" && selection.id === id}
+            onSelect={setSelection}
             onDelete={deleteSelection}
           />
         ))}
@@ -1892,6 +1924,10 @@ export default function Canvas({ roomId, name, color }: CanvasProps) {
           <rect x={4} y={4} width={16} height={16} rx={2} fill="none" stroke="currentColor" strokeWidth={2} />
           <circle cx={9} cy={9.5} r={1.6} fill="currentColor" />
           <path d="M5 16l4.5-5 3.5 4 2-2.5L19 16" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+        </ToolButton>
+        <ToolButton tool="table" current={tool} onClick={setTool} title="Table (G)">
+          <rect x={4} y={5} width={16} height={14} rx={1.5} fill="none" stroke="currentColor" strokeWidth={2} />
+          <path d="M4 10h16M4 14.5h16M10 5v14" fill="none" stroke="currentColor" strokeWidth={2} />
         </ToolButton>
         <input
           ref={fileInputRef}
@@ -2789,6 +2825,7 @@ export function FrameItem({
   allTexts,
   allArrows,
   allImages,
+  allTables,
   onDelete,
 }: {
   board: BoardDoc;
@@ -2803,6 +2840,7 @@ export function FrameItem({
   allTexts: { id: string; data: TextData }[];
   allArrows: { id: string; data: ArrowData }[];
   allImages: { id: string; data: ImageData }[];
+  allTables?: { id: string; data: TableData }[];
   onDelete: (sel: Selection) => void;
 }) {
   const startRef = useRef<{
@@ -2866,6 +2904,11 @@ export function FrameItem({
     for (const { id: iid, data: idata } of allImages) {
       if (inRect(idata.x + idata.w / 2, idata.y + idata.h / 2, rx, ry, rw, rh))
         members.push({ container: board.images, id: iid, x: idata.x, y: idata.y });
+    }
+    for (const { id: tbid, data: tb } of allTables ?? []) {
+      const sz = tableSize(tb);
+      if (inRect(tb.x + sz.w / 2, tb.y + sz.h / 2, rx, ry, rw, rh))
+        members.push({ container: board.tables, id: tbid, x: tb.x, y: tb.y });
     }
     const arrowMembers: { id: string; x1: number; y1: number; x2: number; y2: number }[] = [];
     for (const { id: aid, data: ad } of allArrows) {

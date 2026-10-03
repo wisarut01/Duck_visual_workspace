@@ -1,5 +1,15 @@
 import { describe, it, expect } from "vitest";
+import * as Y from "yjs";
+import { cellKey } from "./table";
 import {
+  addTable,
+  setTableCell,
+  readTable,
+  tableInsertRow,
+  tableRemoveRow,
+  tableInsertCol,
+  tableRemoveCol,
+  type TableData,
   createBoardDoc,
   addShape,
   addNote,
@@ -176,5 +186,106 @@ describe("board-doc.ts — images container (F1a)", () => {
     const id = addShape(b, "ellipse", 1, 2, 3, 4, 5);
     const data = b.shapes.get(id)!.toJSON() as ShapeData;
     expect(data.kind).toBe("ellipse");
+  });
+});
+
+describe("board-doc.ts — tables", () => {
+  it("addTable creates a rows x cols table with default sizes and no cell keys", () => {
+    const b = createBoardDoc();
+    const id = addTable(b, 10, 20, 3, 3);
+    const m = b.tables.get(id)!;
+    const d = m.toJSON() as TableData;
+    expect(d.x).toBe(10);
+    expect(d.y).toBe(20);
+    expect(d.rows).toBe(3);
+    expect(d.cols).toBe(3);
+    expect(d.colWidths).toEqual([140, 140, 140]);
+    expect(d.rowHeights).toEqual([40, 40, 40]);
+    expect(Array.from(m.keys()).some((k) => k.startsWith("cell:"))).toBe(false);
+  });
+
+  it("a doc that never touches tables reports tables.size === 0", () => {
+    const b = createBoardDoc();
+    addShape(b, "rect", 0, 0, 50, 50, 0);
+    expect(b.tables.size).toBe(0);
+  });
+
+  it("setTableCell stores each cell as its own key on the table map; empty clears it", () => {
+    const b = createBoardDoc();
+    const id = addTable(b, 0, 0, 2, 2);
+    setTableCell(b, id, 1, 0, "hello");
+    const m = b.tables.get(id)!;
+    expect(m.get(cellKey(1, 0))).toBe("hello");
+    expect(readTable(b, id)!.cells).toEqual({ "cell:1:0": "hello" });
+    setTableCell(b, id, 1, 0, "");
+    expect(m.has(cellKey(1, 0))).toBe(false);
+  });
+
+  it("concurrent edits to different cells both survive a merge", () => {
+    const a = createBoardDoc();
+    const id = addTable(a, 0, 0, 2, 2);
+    const c = createBoardDoc();
+    Y.applyUpdate(c.doc, Y.encodeStateAsUpdate(a.doc));
+    setTableCell(a, id, 0, 0, "from A");
+    setTableCell(c, id, 1, 1, "from C");
+    Y.applyUpdate(a.doc, Y.encodeStateAsUpdate(c.doc));
+    Y.applyUpdate(c.doc, Y.encodeStateAsUpdate(a.doc));
+    for (const x of [a, c]) {
+      expect(readTable(x, id)!.cells).toEqual({ "cell:0:0": "from A", "cell:1:1": "from C" });
+    }
+  });
+
+  it("insert row shifts cells and syncs sizes; undo reverts it as a single step", () => {
+    const b = createBoardDoc();
+    const id = addTable(b, 0, 0, 2, 2);
+    setTableCell(b, id, 0, 0, "a");
+    setTableCell(b, id, 1, 1, "d");
+    b.undoManager.stopCapturing();
+    tableInsertRow(b, id, 1);
+    let t = readTable(b, id)!;
+    expect(t.rows).toBe(3);
+    expect(t.rowHeights.length).toBe(3);
+    expect(t.cells).toEqual({ "cell:0:0": "a", "cell:2:1": "d" });
+    b.undoManager.undo();
+    t = readTable(b, id)!;
+    expect(t.rows).toBe(2);
+    expect(t.rowHeights.length).toBe(2);
+    expect(t.cells).toEqual({ "cell:0:0": "a", "cell:1:1": "d" });
+  });
+
+  it("remove column drops its cells; undo restores them in one step", () => {
+    const b = createBoardDoc();
+    const id = addTable(b, 0, 0, 2, 2);
+    setTableCell(b, id, 0, 0, "a");
+    setTableCell(b, id, 0, 1, "b");
+    b.undoManager.stopCapturing();
+    tableRemoveCol(b, id, 0);
+    let t = readTable(b, id)!;
+    expect(t.cols).toBe(1);
+    expect(t.cells).toEqual({ "cell:0:0": "b" });
+    b.undoManager.undo();
+    t = readTable(b, id)!;
+    expect(t.cols).toBe(2);
+    expect(t.colWidths.length).toBe(2);
+    expect(t.cells).toEqual({ "cell:0:0": "a", "cell:0:1": "b" });
+  });
+
+  it("remove row / insert col behave and no-op at limits", () => {
+    const b = createBoardDoc();
+    const id = addTable(b, 0, 0, 1, 1);
+    tableRemoveRow(b, id, 0);
+    expect(readTable(b, id)!.rows).toBe(1);
+    tableInsertCol(b, id, 1);
+    expect(readTable(b, id)!.cols).toBe(2);
+  });
+
+  it("table deletion is undoable and tables are in the undo scope", () => {
+    const b = createBoardDoc();
+    const id = addTable(b, 0, 0, 2, 2);
+    b.undoManager.stopCapturing();
+    deleteObj(b.doc, b.tables, id);
+    expect(b.tables.size).toBe(0);
+    b.undoManager.undo();
+    expect(b.tables.get(id)).toBeDefined();
   });
 });

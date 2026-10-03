@@ -3,7 +3,8 @@
 // comparatively thin and untestable in jsdom (no real 2D context), so all
 // the actual logic — what counts as "in the exported region", how a region
 // maps onto a page — lives here instead, same split as connector-path.ts.
-import type { NoteData, ShapeData, TextData, FrameData, ArrowData, ImageData } from "./board-doc";
+import type { NoteData, ShapeData, TextData, FrameData, ArrowData, ImageData, TableData } from "./board-doc";
+import { tableSize } from "./table";
 
 export interface Rect {
   x: number;
@@ -12,7 +13,7 @@ export interface Rect {
   h: number;
 }
 
-export type ExportKind = "note" | "shape" | "text" | "frame" | "arrow" | "image";
+export type ExportKind = "note" | "shape" | "text" | "frame" | "arrow" | "image" | "table";
 
 export interface ExportObject {
   kind: ExportKind;
@@ -63,9 +64,10 @@ export function objectBounds(kind: "text", data: TextData): Rect;
 export function objectBounds(kind: "frame", data: FrameData): Rect;
 export function objectBounds(kind: "arrow", data: ArrowData): Rect;
 export function objectBounds(kind: "image", data: ImageData): Rect;
+export function objectBounds(kind: "table", data: TableData): Rect;
 export function objectBounds(
   kind: ExportKind,
-  data: NoteData | ShapeData | TextData | FrameData | ArrowData | ImageData,
+  data: NoteData | ShapeData | TextData | FrameData | ArrowData | ImageData | TableData,
 ): Rect {
   switch (kind) {
     case "note": {
@@ -83,6 +85,11 @@ export function objectBounds(
     case "image": {
       const d = data as ImageData;
       return { x: d.x, y: d.y, w: d.w, h: d.h };
+    }
+    case "table": {
+      const d = data as TableData;
+      const { w, h } = tableSize(d);
+      return { x: d.x, y: d.y, w, h };
     }
     case "text":
       return textBounds(data as TextData);

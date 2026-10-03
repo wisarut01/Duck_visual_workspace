@@ -1,5 +1,14 @@
 import * as Y from "yjs";
 import { WebsocketProvider } from "y-websocket";
+import {
+  emptyTable,
+  insertRow,
+  removeRow,
+  insertCol,
+  removeCol,
+  cellKey,
+  type TableSnapshot,
+} from "./table";
 
 // Object shape per ../../FLOW.md §2 "Yjs data shape". `body`/`label` are
 // still plain strings, not Y.Text, even now that epic 4 wires real
@@ -107,6 +116,18 @@ export interface ImageData {
   naturalW: number;
   naturalH: number;
 }
+// A table. Cell text is NOT in this shape: each non-empty cell lives as its
+// own `cell:<r>:<c>` key on the table's Y.Map (see table.ts `cellKey`), so two
+// people editing different cells merge instead of last-writer-wins on the
+// whole table. Absent key = empty cell.
+export interface TableData {
+  x: number;
+  y: number;
+  rows: number;
+  cols: number;
+  colWidths: number[];
+  rowHeights: number[];
+}
 export interface ArrowData {
   x1: number;
   y1: number;
@@ -137,6 +158,7 @@ export interface BoardDoc {
   frames: Y.Map<Y.Map<unknown>>;
   arrows: Y.Map<Y.Map<unknown>>;
   images: Y.Map<Y.Map<unknown>>;
+  tables: Y.Map<Y.Map<unknown>>;
   meta: Y.Map<unknown>;
   undoManager: Y.UndoManager;
 }
@@ -158,6 +180,8 @@ export function createBoardDoc(): BoardDoc {
   // an old snapshot that never wrote to "images" just yields an empty map
   // when read back (Y.Doc.getMap creates it on first access either way).
   const images = doc.getMap<Y.Map<unknown>>("images");
+  // Tables: same backward-compat story as images — old snapshots load empty.
+  const tables = doc.getMap<Y.Map<unknown>>("tables");
   // Board-level metadata (currently just the room's display name). Kept out
   // of the undoManager's tracked type list on purpose — renaming the board
   // shouldn't be grouped with, or undoable via the same Ctrl+Z stack as,
@@ -165,10 +189,10 @@ export function createBoardDoc(): BoardDoc {
   const meta = doc.getMap<unknown>("meta");
   // Consecutive transactions within 500ms merge into one undo step —
   // this is what makes a drag (many small commits) undo as a single move.
-  const undoManager = new Y.UndoManager([notes, shapes, texts, frames, arrows, images], {
+  const undoManager = new Y.UndoManager([notes, shapes, texts, frames, arrows, images, tables], {
     captureTimeout: 500,
   });
-  return { doc, notes, shapes, texts, frames, arrows, images, meta, undoManager };
+  return { doc, notes, shapes, texts, frames, arrows, images, tables, meta, undoManager };
 }
 
 export function getBoardName(b: BoardDoc): string {
@@ -245,6 +269,79 @@ export function addImage(
   put(b.doc, b.images, id, { x, y, w, h, url, naturalW, naturalH } satisfies ImageData);
   return id;
 }
+
+export function addTable(b: BoardDoc, x: number, y: number, rows: number, cols: number): string {
+  const id = newId("table");
+  const t = emptyTable(rows, cols);
+  put(b.doc, b.tables, id, {
+    x,
+    y,
+    rows: t.rows,
+    cols: t.cols,
+    colWidths: t.colWidths,
+    rowHeights: t.rowHeights,
+  } satisfies TableData);
+  return id;
+}
+
+/** Reads a table's Y.Map into a plain snapshot (cells gathered from `cell:` keys). */
+export function readTableMap(m: Y.Map<unknown>): TableSnapshot {
+  const cells: Record<string, string> = {};
+  m.forEach((v, k) => {
+    if (k.startsWith("cell:") && typeof v === "string" && v !== "") cells[k] = v;
+  });
+  return {
+    rows: (m.get("rows") as number | undefined) ?? 1,
+    cols: (m.get("cols") as number | undefined) ?? 1,
+    colWidths: (m.get("colWidths") as number[] | undefined) ?? [],
+    rowHeights: (m.get("rowHeights") as number[] | undefined) ?? [],
+    cells,
+  };
+}
+
+export function readTable(b: BoardDoc, id: string): TableSnapshot | null {
+  const m = b.tables.get(id);
+  return m ? readTableMap(m) : null;
+}
+
+export function setTableCell(b: BoardDoc, id: string, r: number, c: number, text: string) {
+  const m = b.tables.get(id);
+  if (!m) return;
+  const key = cellKey(r, c);
+  if (((m.get(key) as string | undefined) ?? "") === text) return;
+  b.doc.transact(() => {
+    if (text === "") m.delete(key);
+    else m.set(key, text);
+  });
+}
+
+// Applies a pure mutator to a table in ONE transaction (one undo step).
+// Only keys that actually changed are touched, so unrelated concurrent cell
+// edits aren't needlessly overwritten.
+function mutateTable(b: BoardDoc, id: string, fn: (t: TableSnapshot) => TableSnapshot) {
+  const m = b.tables.get(id);
+  if (!m) return;
+  const before = readTableMap(m);
+  const after = fn(before);
+  if (after === before) return;
+  b.doc.transact(() => {
+    m.set("rows", after.rows);
+    m.set("cols", after.cols);
+    m.set("colWidths", after.colWidths);
+    m.set("rowHeights", after.rowHeights);
+    for (const k of Object.keys(before.cells)) {
+      if (!(k in after.cells)) m.delete(k);
+    }
+    for (const [k, v] of Object.entries(after.cells)) {
+      if (before.cells[k] !== v) m.set(k, v);
+    }
+  });
+}
+
+export const tableInsertRow = (b: BoardDoc, id: string, at: number) => mutateTable(b, id, (t) => insertRow(t, at));
+export const tableRemoveRow = (b: BoardDoc, id: string, at: number) => mutateTable(b, id, (t) => removeRow(t, at));
+export const tableInsertCol = (b: BoardDoc, id: string, at: number) => mutateTable(b, id, (t) => insertCol(t, at));
+export const tableRemoveCol = (b: BoardDoc, id: string, at: number) => mutateTable(b, id, (t) => removeCol(t, at));
 
 export function addArrow(
   b: BoardDoc,

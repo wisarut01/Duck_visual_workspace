@@ -7,7 +7,7 @@ import {
   type ExportObject,
   type Rect,
 } from "./export-bounds";
-import type { NoteData, ShapeData, TextData, FrameData, ArrowData, ImageData } from "./board-doc";
+import type { NoteData, ShapeData, TextData, FrameData, ArrowData, ImageData, TableData } from "./board-doc";
 
 describe("export-bounds.ts — pure geometry core for PDF export (F1b)", () => {
   describe("objectBounds", () => {
@@ -51,6 +51,25 @@ describe("export-bounds.ts — pure geometry core for PDF export (F1b)", () => {
       expect(r.y).toBeLessThanOrEqual(0);
       expect(r.x + r.w).toBeGreaterThanOrEqual(100);
       expect(r.y + r.h).toBeGreaterThanOrEqual(40);
+    });
+
+    it("table: x/y plus summed column widths / row heights", () => {
+      const data: TableData = {
+        x: 5,
+        y: 6,
+        rows: 2,
+        cols: 3,
+        colWidths: [100, 50, 25],
+        rowHeights: [40, 60],
+      };
+      expect(objectBounds("table", data)).toEqual({ x: 5, y: 6, w: 175, h: 100 });
+    });
+
+    it("table participates in region hit-testing", () => {
+      const data: TableData = { x: 0, y: 0, rows: 1, cols: 1, colWidths: [100], rowHeights: [40] };
+      const o: ExportObject = { kind: "table", id: "t", bounds: objectBounds("table", data) };
+      expect(objectsInRegion([o], { x: 90, y: 30, w: 200, h: 200 })).toHaveLength(1);
+      expect(objectsInRegion([o], { x: 200, y: 200, w: 10, h: 10 })).toHaveLength(0);
     });
 
     it("arrow: handles a vertical or horizontal line (zero-width/height base box) without a degenerate rect", () => {
