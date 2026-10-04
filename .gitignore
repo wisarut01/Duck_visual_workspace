@@ -50,3 +50,6 @@ next-env.d.ts
 .claude/worktrees/
 
 !.env.example
+
+# md file 
+*.md
